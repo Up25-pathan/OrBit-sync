@@ -277,6 +277,26 @@ router.post('/login', async (req: Request, res: Response) => {
 // SECTION B: GOOGLE & GITHUB OAUTH 2.0 REDIRECTS
 // ----------------------------------------------------
 
+// GET /api/auth/google
+router.get('/google', (req: Request, res: Response) => {
+  if (!process.env.GOOGLE_CLIENT_ID || !process.env.GOOGLE_REDIRECT_URI) {
+    console.log('[Google OAuth Sandbox] No credentials found. Redirecting to sandbox callback...');
+    return res.redirect('/api/auth/google/callback');
+  }
+  const url = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${process.env.GOOGLE_CLIENT_ID}&redirect_uri=${encodeURIComponent(process.env.GOOGLE_REDIRECT_URI)}&response_type=code&scope=${encodeURIComponent('profile email')}`;
+  return res.redirect(url);
+});
+
+// GET /api/auth/github
+router.get('/github', (req: Request, res: Response) => {
+  if (!process.env.GITHUB_CLIENT_ID || !process.env.GITHUB_REDIRECT_URI) {
+    console.log('[GitHub OAuth Sandbox] No credentials found. Redirecting to sandbox callback...');
+    return res.redirect('/api/auth/github/callback');
+  }
+  const url = `https://github.com/login/oauth/authorize?client_id=${process.env.GITHUB_CLIENT_ID}&redirect_uri=${encodeURIComponent(process.env.GITHUB_REDIRECT_URI)}&scope=${encodeURIComponent('user:email')}`;
+  return res.redirect(url);
+});
+
 // GET /api/auth/google/callback
 router.get('/google/callback', async (req: Request, res: Response) => {
   try {
