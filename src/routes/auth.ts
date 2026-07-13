@@ -168,6 +168,11 @@ router.post('/signup', async (req: Request, res: Response) => {
           console.log(`[SMTP Mailer] Verification email successfully sent to ${targetEmail}`);
         } catch (err) {
           console.error('[SMTP Mailer Error] Failed to send SMTP email:', err);
+          console.log(`=========================================`);
+          console.log(`[SMTP Fallback Logs] EMAIL VERIFICATION CODE (SMTP Failed)`);
+          console.log(`Recipient: ${targetEmail}`);
+          console.log(`Verification Code: ${verificationCode}`);
+          console.log(`=========================================`);
         }
       } else {
         console.log(`=========================================`);
