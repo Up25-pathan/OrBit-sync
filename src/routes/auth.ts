@@ -318,13 +318,13 @@ router.get('/google/callback', async (req: Request, res: Response) => {
         grant_type: 'authorization_code',
       }),
     });
-    const tokens = await tokenRes.json();
+    const tokens = (await tokenRes.json()) as any;
 
     // Fetch user details from Google
     const profileRes = await fetch('https://www.googleapis.com/oauth2/v2/userinfo', {
       headers: { Authorization: `Bearer ${tokens.access_token}` },
     });
-    const profile = await profileRes.json();
+    const profile = (await profileRes.json()) as any;
     const email = profile.email;
 
     let user = await prisma.user.findUnique({ where: { email }, include: { license: true, subscription: true } });
@@ -390,19 +390,19 @@ router.get('/github/callback', async (req: Request, res: Response) => {
         redirect_uri: process.env.GITHUB_REDIRECT_URI,
       }),
     });
-    const tokens = await tokenRes.json();
+    const tokens = (await tokenRes.json()) as any;
 
     // Fetch user profile from GitHub
     const userRes = await fetch('https://api.github.com/user', {
       headers: { Authorization: `Bearer ${tokens.access_token}` },
     });
-    const userProfile = await userRes.json();
+    const userProfile = (await userRes.json()) as any;
 
     // Fetch user email
     const emailsRes = await fetch('https://api.github.com/user/emails', {
       headers: { Authorization: `Bearer ${tokens.access_token}` },
     });
-    const emails = await emailsRes.json();
+    const emails = (await emailsRes.json()) as any;
     const primaryEmail = emails.find((e: any) => e.primary)?.email || userProfile.email || `${userProfile.login}@github.com`;
 
     let user = await prisma.user.findUnique({ where: { email: primaryEmail }, include: { license: true, subscription: true } });
