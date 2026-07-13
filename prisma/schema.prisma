@@ -1,0 +1,53 @@
+datasource db {
+  provider = "sqlite"
+  url      = "file:./dev.db"
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model User {
+  id                  String        @id @default(uuid())
+  email               String        @unique
+  passwordHash        String
+  isVerified          Boolean       @default(false)
+  verificationCode    String?
+  verificationExpires DateTime?
+  createdAt           DateTime      @default(now())
+  subscription        Subscription?
+  license             License?
+}
+
+model Subscription {
+  id                   String   @id @default(uuid())
+  userId               String   @unique
+  user                 User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  stripeCustomerId     String?  @unique
+  stripeSubscriptionId String?  @unique
+  planTier             String   // 'solo', 'mesh', 'enterprise'
+  status               String   // 'active', 'past_due', 'canceled'
+  expiresAt            DateTime
+}
+
+model License {
+  id         String   @id @default(uuid())
+  userId     String   @unique
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  licenseKey String   @unique
+  maxDevices Int      @default(3)
+  createdAt  DateTime @default(now())
+  devices    Device[]
+}
+
+model Device {
+  id        String   @id @default(uuid())
+  licenseId String
+  license   License  @relation(fields: [licenseId], references: [id], onDelete: Cascade)
+  deviceId  String   // Cryptographic machine fingerprint
+  hostname  String?
+  platform  String   // 'windows', 'macos', 'linux'
+  lastSeen  DateTime @default(now())
+
+  @@unique([licenseId, deviceId])
+}
