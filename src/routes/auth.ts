@@ -16,10 +16,15 @@ const transporter = smtpHost && smtpUser && smtpPass
   ? nodemailer.createTransport({
       host: smtpHost,
       port: smtpPort,
+      secure: smtpPort === 465, // true for 465, false for 587
       auth: {
         user: smtpUser,
         pass: smtpPass
-      }
+      },
+      tls: {
+        rejectUnauthorized: false
+      },
+      family: 4 // Force IPv4 only to prevent Render ENETUNREACH socket errors
     })
   : null;
 
