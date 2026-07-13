@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
 import crypto from 'crypto';
 import nodemailer from 'nodemailer';
+import dns from 'dns';
 import { prisma } from '../db';
 import { hashPassword, verifyPassword, signToken } from '../auth';
 
@@ -11,6 +12,11 @@ const smtpHost = process.env.SMTP_HOST || '';
 const smtpPort = parseInt(process.env.SMTP_PORT || '587');
 const smtpUser = process.env.SMTP_USER || '';
 const smtpPass = process.env.SMTP_PASS || '';
+
+// Custom DNS lookup forcing IPv4 resolution for Nodemailer sockets
+const customLookup = (hostname: string, options: any, callback: any) => {
+  return dns.lookup(hostname, { ...options, family: 4 }, callback);
+};
 
 const transporter = smtpHost && smtpUser && smtpPass
   ? nodemailer.createTransport({
@@ -24,7 +30,7 @@ const transporter = smtpHost && smtpUser && smtpPass
       tls: {
         rejectUnauthorized: false
       },
-      family: 4 // Force IPv4 only to prevent Render ENETUNREACH socket errors
+      lookup: customLookup
     } as any)
   : null;
 
