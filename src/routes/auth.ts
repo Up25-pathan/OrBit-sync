@@ -25,7 +25,7 @@ const transporter = smtpHost && smtpUser && smtpPass
         rejectUnauthorized: false
       },
       family: 4 // Force IPv4 only to prevent Render ENETUNREACH socket errors
-    })
+    } as any)
   : null;
 
 // Helper to provision default license and subscription for new users
