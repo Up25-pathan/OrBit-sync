@@ -6,6 +6,7 @@ import authRouter from './routes/auth';
 import consoleRouter from './routes/console';
 import licenseRouter from './routes/license';
 import billingRouter from './routes/billing';
+import adminRouter from './routes/admin';
 
 // Force DNS resolver to prefer IPv4 over IPv6 (fixes Render ENETUNREACH socket connect errors)
 dns.setDefaultResultOrder('ipv4first');
@@ -15,9 +16,25 @@ dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 5000;
 
-// Enable CORS for client connections
+const allowedOrigins = [
+  process.env.CLIENT_URL,
+  'http://localhost:3000',
+  'http://localhost:9090',
+  'https://orbit-sync.onrender.com',
+  'https://orbit-server-kae6.onrender.com',
+  'tauri://localhost',
+  'https://tauri.localhost',
+].filter(Boolean) as string[];
+
+// Enable CORS for client connections & Control Server verifications
 app.use(cors({
-  origin: process.env.CLIENT_URL || 'http://localhost:3000',
+  origin: (origin, callback) => {
+    if (!origin || allowedOrigins.includes(origin) || origin.startsWith('http://localhost:')) {
+      callback(null, true);
+    } else {
+      callback(new Error('Cross-Origin Access Denied by OrBit Security Policy'));
+    }
+  },
   credentials: true
 }));
 
@@ -31,11 +48,23 @@ app.use((req, res, next) => {
   }
 });
 
-// Mount Routes
+// Mount Routes (supporting both legacy /api/ and versioned /api/v1/ endpoints)
 app.use('/api/auth', authRouter);
+app.use('/api/v1/auth', authRouter);
+
 app.use('/api/console', consoleRouter);
+app.use('/api/v1/console', consoleRouter);
+
 app.use('/api/license', licenseRouter);
+app.use('/api/licenses', licenseRouter);
+app.use('/api/v1/license', licenseRouter);
+app.use('/api/v1/licenses', licenseRouter);
+
 app.use('/api/billing', billingRouter);
+app.use('/api/v1/billing', billingRouter);
+
+app.use('/api/admin', adminRouter);
+app.use('/api/v1/admin', adminRouter);
 
 // Health check endpoint
 app.get('/health', (req, res) => {

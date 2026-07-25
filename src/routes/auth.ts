@@ -3,7 +3,8 @@ import crypto from 'crypto';
 import nodemailer from 'nodemailer';
 import dns from 'dns';
 import { prisma } from '../db';
-import { hashPassword, verifyPassword, signToken } from '../auth';
+import { hashPassword, verifyPassword, signToken, verifyToken } from '../auth';
+import { generateLicenseKey, normalizeTier } from '../utils/licenseGenerator';
 
 const router = Router();
 
@@ -36,9 +37,8 @@ const transporter = smtpHost && smtpUser && smtpPass
 
 // Helper to provision default license and subscription for new users
 async function provisionUserDefaultResources(tx: any, userId: string) {
-  // Generate default license key
-  const keyHex = crypto.randomBytes(12).toString('hex');
-  const licenseKey = `orbit_dev_pk_${keyHex}`;
+  // Generate formatted default Free Tier license key (ORBIT-FREE-XXXXXX-TIMESTAMP-SIG)
+  const licenseKey = generateLicenseKey('free');
 
   await tx.license.create({
     data: {
@@ -55,7 +55,7 @@ async function provisionUserDefaultResources(tx: any, userId: string) {
   await tx.subscription.create({
     data: {
       userId,
-      planTier: 'solo',
+      planTier: 'free',
       status: 'active',
       expiresAt,
     },
@@ -69,7 +69,7 @@ async function provisionUserDefaultResources(tx: any, userId: string) {
 // POST /api/auth/signup
 router.post('/signup', async (req: Request, res: Response) => {
   try {
-    const { email, password } = req.body;
+    const { email, password, displayName } = req.body;
 
     if (!email || !password) {
       return res.status(400).json({ error: 'Email and password are required.' });
@@ -99,6 +99,7 @@ router.post('/signup', async (req: Request, res: Response) => {
     await prisma.user.create({
       data: {
         email,
+        displayName: displayName || email.split('@')[0],
         passwordHash,
         isVerified: false,
         verificationCode: code,
@@ -262,8 +263,9 @@ router.post('/verify-code', async (req: Request, res: Response) => {
       user: {
         id: result.user.id,
         email: result.user.email,
+        displayName: result.user.displayName || result.user.email.split('@')[0],
         licenseKey: result.license?.licenseKey || '',
-        planTier: result.subscription?.planTier || 'solo',
+        planTier: normalizeTier(result.subscription?.planTier || 'free'),
       },
       token,
     });
@@ -323,8 +325,9 @@ router.post('/login', async (req: Request, res: Response) => {
       user: {
         id: user.id,
         email: user.email,
+        displayName: user.displayName || user.email.split('@')[0],
         licenseKey: user.license?.licenseKey || '',
-        planTier: user.subscription?.planTier || 'solo',
+        planTier: normalizeTier(user.subscription?.planTier || 'free'),
       },
       token,
     });
@@ -506,6 +509,57 @@ router.get('/github/callback', async (req: Request, res: Response) => {
   } catch (error: any) {
     console.error('GitHub OAuth callback error:', error);
     return res.redirect(`${process.env.CLIENT_URL || 'http://localhost:3000'}/login?error=GitHub OAuth failed`);
+  }
+});
+
+// GET /api/auth/me or GET /api/v1/auth/me
+router.get('/me', async (req: Request, res: Response) => {
+  try {
+    const authHeader = req.headers.authorization;
+    let token = '';
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      token = authHeader.substring(7);
+    } else if (req.headers.cookie) {
+      const cookies = req.headers.cookie.split(';').reduce((acc: any, c) => {
+        const parts = c.trim().split('=');
+        if (parts[0]) acc[parts[0]] = parts.slice(1).join('=');
+        return acc;
+      }, {});
+      token = cookies['orbit_session'] || '';
+    }
+
+    if (!token) {
+      return res.status(401).json({ error: 'No authorization token provided.' });
+    }
+
+    const payload = verifyToken(token);
+    if (!payload || !payload.id) {
+      return res.status(401).json({ error: 'Invalid or expired session token.' });
+    }
+
+    const user = await prisma.user.findUnique({
+      where: { id: payload.id },
+      include: {
+        license: true,
+        subscription: true,
+      },
+    });
+
+    if (!user) {
+      return res.status(404).json({ error: 'User profile not found.' });
+    }
+
+    return res.status(200).json({
+      user: {
+        id: user.id,
+        email: user.email,
+        displayName: user.displayName || user.email.split('@')[0],
+        licenseKey: user.license?.licenseKey || '',
+        planTier: normalizeTier(user.subscription?.planTier || 'free'),
+      },
+    });
+  } catch (error: any) {
+    return res.status(401).json({ error: 'Unauthorized profile access.' });
   }
 });
 

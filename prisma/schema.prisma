@@ -10,7 +10,9 @@ generator client {
 model User {
   id                  String        @id @default(uuid())
   email               String        @unique
+  displayName         String?
   passwordHash        String
+  role                String        @default("USER") // "USER", "ADMIN"
   isVerified          Boolean       @default(false)
   verificationCode    String?
   verificationExpires DateTime?
@@ -25,7 +27,7 @@ model Subscription {
   user                 User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   stripeCustomerId     String?  @unique
   stripeSubscriptionId String?  @unique
-  planTier             String   // 'solo', 'mesh', 'enterprise'
+  planTier             String   // 'free', 'pro', 'enterprise'
   status               String   // 'active', 'past_due', 'canceled'
   expiresAt            DateTime
 }
@@ -50,4 +52,14 @@ model Device {
   lastSeen  DateTime @default(now())
 
   @@unique([licenseId, deviceId])
+}
+
+model SupportTicket {
+  id        String   @id @default(uuid())
+  name      String
+  email     String
+  subject   String
+  message   String
+  status    String   @default("OPEN") // "OPEN", "IN_PROGRESS", "RESOLVED"
+  createdAt DateTime @default(now())
 }
