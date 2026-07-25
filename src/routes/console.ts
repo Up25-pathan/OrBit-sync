@@ -35,6 +35,7 @@ router.get('/dashboard', authenticateJWT, async (req: AuthRequest, res: Response
     return res.status(200).json({
       user: {
         email: user.email,
+        role: user.role,
       },
       license: user.license
         ? {
