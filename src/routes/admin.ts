@@ -466,4 +466,121 @@ router.put('/tickets/:id', async (req: Request, res: Response) => {
   }
 });
 
+// ----------------------------------------------------
+// 6. DESKTOP APP RELEASE MANAGEMENT
+// GET /api/v1/admin/releases
+// POST /api/v1/admin/releases
+// PUT /api/v1/admin/releases/:id
+// DELETE /api/v1/admin/releases/:id
+// ----------------------------------------------------
+router.get('/releases', async (req: Request, res: Response) => {
+  try {
+    const releases = await prisma.appRelease.findMany({
+      orderBy: { createdAt: 'desc' },
+    });
+    return res.status(200).json({ releases });
+  } catch (err: any) {
+    return res.status(500).json({ error: 'Failed to fetch desktop releases.' });
+  }
+});
+
+router.post('/releases', async (req: Request, res: Response) => {
+  try {
+    const {
+      version,
+      title,
+      notes,
+      mandatory,
+      isActive,
+      winUrl,
+      winSignature,
+      macX64Url,
+      macX64Signature,
+      macArmUrl,
+      macArmSignature,
+      linuxUrl,
+      linuxSignature,
+    } = req.body;
+
+    if (!version || !notes) {
+      return res.status(400).json({ error: 'Version string and release notes are required.' });
+    }
+
+    const newRelease = await prisma.appRelease.create({
+      data: {
+        version: version.trim(),
+        title: title ? title.trim() : `OrBit Desktop ${version}`,
+        notes: notes.trim(),
+        mandatory: !!mandatory,
+        isActive: isActive !== undefined ? !!isActive : true,
+        winUrl: winUrl || null,
+        winSignature: winSignature || null,
+        macX64Url: macX64Url || null,
+        macX64Signature: macX64Signature || null,
+        macArmUrl: macArmUrl || null,
+        macArmSignature: macArmSignature || null,
+        linuxUrl: linuxUrl || null,
+        linuxSignature: linuxSignature || null,
+      },
+    });
+
+    return res.status(201).json({ success: true, release: newRelease });
+  } catch (err: any) {
+    console.error('Create release error:', err);
+    return res.status(500).json({ error: err.code === 'P2002' ? 'Version string already exists.' : 'Failed to publish release.' });
+  }
+});
+
+router.put('/releases/:id', async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const {
+      title,
+      notes,
+      mandatory,
+      isActive,
+      winUrl,
+      winSignature,
+      macX64Url,
+      macX64Signature,
+      macArmUrl,
+      macArmSignature,
+      linuxUrl,
+      linuxSignature,
+    } = req.body;
+
+    const updated = await prisma.appRelease.update({
+      where: { id },
+      data: {
+        ...(title !== undefined ? { title: title.trim() } : {}),
+        ...(notes !== undefined ? { notes: notes.trim() } : {}),
+        ...(mandatory !== undefined ? { mandatory: !!mandatory } : {}),
+        ...(isActive !== undefined ? { isActive: !!isActive } : {}),
+        ...(winUrl !== undefined ? { winUrl: winUrl || null } : {}),
+        ...(winSignature !== undefined ? { winSignature: winSignature || null } : {}),
+        ...(macX64Url !== undefined ? { macX64Url: macX64Url || null } : {}),
+        ...(macX64Signature !== undefined ? { macX64Signature: macX64Signature || null } : {}),
+        ...(macArmUrl !== undefined ? { macArmUrl: macArmUrl || null } : {}),
+        ...(macArmSignature !== undefined ? { macArmSignature: macArmSignature || null } : {}),
+        ...(linuxUrl !== undefined ? { linuxUrl: linuxUrl || null } : {}),
+        ...(linuxSignature !== undefined ? { linuxSignature: linuxSignature || null } : {}),
+      },
+    });
+
+    return res.status(200).json({ success: true, release: updated });
+  } catch (err: any) {
+    return res.status(500).json({ error: 'Failed to update release record.' });
+  }
+});
+
+router.delete('/releases/:id', async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    await prisma.appRelease.delete({ where: { id } });
+    return res.status(200).json({ success: true, message: 'Release deleted successfully.' });
+  } catch (err: any) {
+    return res.status(500).json({ error: 'Failed to delete release.' });
+  }
+});
+
 export default router;

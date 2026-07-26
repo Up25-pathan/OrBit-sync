@@ -7,6 +7,7 @@ import consoleRouter from './routes/console';
 import licenseRouter from './routes/license';
 import billingRouter from './routes/billing';
 import adminRouter from './routes/admin';
+import updaterRouter from './routes/updater';
 
 // Force DNS resolver to prefer IPv4 over IPv6 (fixes Render ENETUNREACH socket connect errors)
 dns.setDefaultResultOrder('ipv4first');
@@ -65,6 +66,9 @@ app.use('/api/v1/billing', billingRouter);
 
 app.use('/api/admin', adminRouter);
 app.use('/api/v1/admin', adminRouter);
+
+app.use('/api/updater', updaterRouter);
+app.use('/api/v1/updater', updaterRouter);
 
 // Health check endpoint
 app.get('/health', (req, res) => {

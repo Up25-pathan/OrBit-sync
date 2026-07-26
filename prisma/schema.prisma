@@ -63,3 +63,23 @@ model SupportTicket {
   status    String   @default("OPEN") // "OPEN", "IN_PROGRESS", "RESOLVED"
   createdAt DateTime @default(now())
 }
+
+model AppRelease {
+  id              String   @id @default(uuid())
+  version         String   @unique
+  title           String?
+  notes           String
+  pubDate         DateTime @default(now())
+  mandatory       Boolean  @default(false)
+  isActive        Boolean  @default(true)
+  winUrl          String?
+  winSignature    String?
+  macX64Url       String?
+  macX64Signature String?
+  macArmUrl       String?
+  macArmSignature String?
+  linuxUrl        String?
+  linuxSignature  String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
