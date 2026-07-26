@@ -67,33 +67,11 @@ router.get('/dashboard', authenticateJWT, async (req: AuthRequest, res: Response
   }
 });
 
-// POST /api/console/license/rotate
+// POST /api/console/license/rotate (Disabled for user self-service security)
 router.post('/license/rotate', authenticateJWT, async (req: AuthRequest, res: Response) => {
-  try {
-    const userId = req.user?.id;
-
-    if (!userId) {
-      return res.status(401).json({ error: 'Unauthorized.' });
-    }
-
-    const keyHex = crypto.randomBytes(12).toString('hex');
-    const licenseKey = `orbit_dev_pk_${keyHex}`;
-
-    // Update license key signature in DB
-    const updated = await prisma.license.update({
-      where: { userId },
-      data: {
-        licenseKey,
-      },
-    });
-
-    return res.status(200).json({
-      licenseKey: updated.licenseKey,
-    });
-  } catch (error: any) {
-    console.error('Rotate license error:', error);
-    return res.status(500).json({ error: 'Internal server error rotating license.' });
-  }
+  return res.status(403).json({
+    error: 'Self-service key rotation is disabled for system security during Beta. Contact an administrator for key re-issuance.',
+  });
 });
 
 // POST /api/console/devices/revoke
