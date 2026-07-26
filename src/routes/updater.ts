@@ -1,7 +1,27 @@
 import { Router, Request, Response } from 'express';
+import path from 'path';
+import fs from 'fs';
 import { prisma } from '../db';
 
 const router = Router();
+
+// GET /api/v1/updater/download/:fileName (Secure file download stream)
+router.get('/download/:fileName', (req: Request, res: Response) => {
+  try {
+    const { fileName } = req.params;
+    const sanitizedFileName = path.basename(fileName);
+    const filePath = path.join(__dirname, '../../uploads/releases', sanitizedFileName);
+
+    if (!fs.existsSync(filePath)) {
+      return res.status(404).json({ error: 'Release installer payload file not found.' });
+    }
+
+    return res.sendFile(filePath);
+  } catch (err: any) {
+    console.error('Error streaming update payload file:', err);
+    return res.status(500).json({ error: 'Failed to stream update payload file.' });
+  }
+});
 
 // Build Tauri JSON Payload for a release
 function buildTauriPayload(release: any) {

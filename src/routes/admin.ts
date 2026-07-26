@@ -1,9 +1,34 @@
 import { Router, Request, Response, NextFunction } from 'express';
+import multer from 'multer';
+import path from 'path';
+import fs from 'fs';
 import { prisma } from '../db';
 import { verifyToken, hashPassword, verifyPassword } from '../auth';
 import { generateLicenseKey, normalizeTier } from '../utils/licenseGenerator';
 
 const router = Router();
+
+const uploadDir = path.join(__dirname, '../../uploads/releases');
+if (!fs.existsSync(uploadDir)) {
+  fs.mkdirSync(uploadDir, { recursive: true });
+}
+
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    cb(null, uploadDir);
+  },
+  filename: (req, file, cb) => {
+    const ext = path.extname(file.originalname);
+    const basename = path.basename(file.originalname, ext).replace(/[^a-zA-Z0-9_-]/g, '_');
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
+    cb(null, `${basename}_${uniqueSuffix}${ext}`);
+  },
+});
+
+const upload = multer({
+  storage,
+  limits: { fileSize: 500 * 1024 * 1024 }, // 500MB max per binary payload
+});
 
 export interface AdminAuthRequest extends Request {
   adminUser?: {
@@ -580,6 +605,43 @@ router.delete('/releases/:id', async (req: Request, res: Response) => {
     return res.status(200).json({ success: true, message: 'Release deleted successfully.' });
   } catch (err: any) {
     return res.status(500).json({ error: 'Failed to delete release.' });
+  }
+});
+
+// POST /api/v1/admin/releases/upload
+const uploadFields = upload.fields([
+  { name: 'winFile', maxCount: 1 },
+  { name: 'macX64File', maxCount: 1 },
+  { name: 'macArmFile', maxCount: 1 },
+  { name: 'linuxFile', maxCount: 1 },
+]);
+
+router.post('/releases/upload', uploadFields, async (req: Request, res: Response) => {
+  try {
+    const files = req.files as { [fieldname: string]: Express.Multer.File[] };
+    const host = req.get('host') || 'orbit-sync.onrender.com';
+    const protocol = req.protocol === 'https' || req.get('x-forwarded-proto') === 'https' ? 'https' : 'http';
+    const baseUrl = `${protocol}://${host}`;
+
+    const urls: Record<string, string> = {};
+
+    if (files.winFile?.[0]) {
+      urls.winUrl = `${baseUrl}/api/v1/updater/download/${files.winFile[0].filename}`;
+    }
+    if (files.macX64File?.[0]) {
+      urls.macX64Url = `${baseUrl}/api/v1/updater/download/${files.macX64File[0].filename}`;
+    }
+    if (files.macArmFile?.[0]) {
+      urls.macArmUrl = `${baseUrl}/api/v1/updater/download/${files.macArmFile[0].filename}`;
+    }
+    if (files.linuxFile?.[0]) {
+      urls.linuxUrl = `${baseUrl}/api/v1/updater/download/${files.linuxFile[0].filename}`;
+    }
+
+    return res.status(200).json({ success: true, urls });
+  } catch (err: any) {
+    console.error('File upload error:', err);
+    return res.status(500).json({ error: 'Failed to upload installer files.' });
   }
 });
 
