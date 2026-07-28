@@ -405,7 +405,7 @@ router.get('/google/callback', async (req: Request, res: Response) => {
       }
 
       const token = signToken({ id: user!.id, email: user!.email });
-      return res.redirect(`${clientUrl}/console?oauth_success=true&token=${token}&email=${user!.email}`);
+      return res.redirect(`${clientUrl}/console?oauth_success=true&token=${token}&email=${user!.email}&role=${user!.role}`);
     }
 
     // 2. Real Google OAuth
@@ -443,7 +443,7 @@ router.get('/google/callback', async (req: Request, res: Response) => {
     }
 
     const token = signToken({ id: user!.id, email: user!.email });
-    return res.redirect(`${clientUrl}/console?oauth_success=true&token=${token}&email=${user!.email}`);
+    return res.redirect(`${clientUrl}/console?oauth_success=true&token=${token}&email=${user!.email}&role=${user!.role}`);
 
   } catch (error: any) {
     console.error('Google OAuth callback error:', error);
@@ -476,7 +476,7 @@ router.get('/github/callback', async (req: Request, res: Response) => {
       }
 
       const token = signToken({ id: user!.id, email: user!.email });
-      return res.redirect(`${clientUrl}/console?oauth_success=true&token=${token}&email=${user!.email}`);
+      return res.redirect(`${clientUrl}/console?oauth_success=true&token=${token}&email=${user!.email}&role=${user!.role}`);
     }
 
     // 2. Real GitHub OAuth
@@ -522,7 +522,7 @@ router.get('/github/callback', async (req: Request, res: Response) => {
     }
 
     const token = signToken({ id: user!.id, email: user!.email });
-    return res.redirect(`${clientUrl}/console?oauth_success=true&token=${token}&email=${user!.email}`);
+    return res.redirect(`${clientUrl}/console?oauth_success=true&token=${token}&email=${user!.email}&role=${user!.role}`);
 
   } catch (error: any) {
     console.error('GitHub OAuth callback error:', error);
