@@ -1,0 +1,116 @@
+# Architecture Plan: Website Server & Control Server Integration
+
+This document outlines the robust end-to-end workflow between the **Website Server (Account & Billing Hub)**, the **Control Server (Real-time P2P Signaling & Relay)**, and the **OrBit Desktop Software**.
+
+---
+
+## 🏛️ Dual-Server System Architecture
+
+```
+                                  ┌─────────────────────────────────────────┐
+                                  │             WEBSITE SERVER              │
+                                  │      (https://website.orbit.dev)        │
+                                  ├─────────────────────────────────────────┤
+                                  │ • User Sign-Up & Login (Email/OAuth)    │
+                                  │ • Billing & Stripe/LemonSqueezy Checkout │
+                                  │ • License Key Generation & Management   │
+                                  └────────────────────┬────────────────────┘
+                                                       │
+                                        Validate Key   │  REST / Webhook
+                                        & Check Tier   │  (Public Key Verification)
+                                                       ▼
+┌───────────────────────────┐  POST /auth/license  ┌─────────────────────────────────────────┐
+│   ORBIT DESKTOP CLIENT    ├─────────────────────►│             CONTROL SERVER              │
+│     (Tauri / React UI)   │◄─────────────────────┤      (https://control.orbit.dev)        │
+└─────────────┬─────────────┘  JWT & User Profile  ├─────────────────────────────────────────┤
+              │                                    │ • License Validation against Web Server │
+              │ IPC Communication                  │ • JWT Session Token Issuance            │
+              ▼                                    │ • Real-time P2P mDNS/ICE Signaling      │
+┌───────────────────────────┐                      │ • Zero-Knowledge Encrypted Dead Drop    │
+│    LOCAL RUST DAEMON      │                      └─────────────────────────────────────────┘
+│ (.orbit/shadow.git engine)│
+└───────────────────────────┘
+```
+
+---
+
+## 🔄 End-to-End User & License Workflow
+
+### Phase 1: Account Creation & License Purchase (Website Server)
+1. Developer visits the **Website Server** (`https://website.orbit.dev`).
+2. Developer creates an account via Email/Password or OAuth (GitHub / Google).
+3. Developer selects a tier (**Free**, **Pro**, or **Enterprise**):
+   - **Free Plan**: Instantly assigned a Free Tier License Key upon registration.
+   - **Pro/Enterprise Plan**: Completes Stripe checkout; Website generates a Pro License Key.
+4. Website Server stores the user account & license record and presents the License Key on the Web Dashboard:
+   ```
+   ORBIT-PRO-9F8A2B-1775865600-A3F9B2
+   ```
+
+---
+
+### Phase 2: License Key Entry in OrBit Desktop Software
+1. Developer installs and opens the **OrBit Desktop App**.
+2. On first launch, the app displays the **License Auth Screen** ([`AuthPage.tsx`](file:///c:/Users/admin/Desktop/orbit-app/apps/desktop-ui/src/components/AuthPage.tsx)).
+3. Developer pastes their License Key and clicks **"Connect Workspace"**.
+4. Desktop UI sends an HTTP request to the **Control Server**:
+   ```http
+   POST /api/v1/auth/license
+   Content-Type: application/json
+
+   {
+     "licenseKey": "ORBIT-PRO-9F8A2B-1775865600-A3F9B2"
+   }
+   ```
+
+---
+
+### Phase 3: Control Server Validation & Session Creation
+1. **Control Server** receives the key and invokes `WebsiteValidator` ([`services/control-server/internal/license/license.go`](file:///c:/Users/admin/Desktop/orbit-app/services/control-server/internal/license/license.go)).
+2. Control Server verifies the key against the Website Server API (`GET https://website.orbit.dev/api/v1/licenses/verify?key=...`) or validates the cryptographic Ed25519 signature directly using the website's public key.
+3. Website Server returns validated payload:
+   ```json
+   {
+     "userId": "usr_9f8a2b1c",
+     "displayName": "Jamal Developer",
+     "email": "jamal@orbit.dev",
+     "planTier": "pro",
+     "expiresAt": "2027-01-01T00:00:00Z"
+   }
+   ```
+4. Control Server creates/updates the user record in its database ([`db.go`](file:///c:/Users/admin/Desktop/orbit-app/services/control-server/internal/repository/db.go)) and issues a signed JWT session token (valid for 30 days).
+5. Control Server responds to Desktop UI with JWT token and User Profile.
+
+---
+
+### Phase 4: Local Storage, Daemon Binding & Offline Grace Period
+1. **Desktop App** stores the JWT token and profile metadata in secure local storage.
+2. **Local Rust Daemon** receives user identity, generates/loads local Ed25519 keypair (`.orbit/identity.key`), and binds keypair fingerprint to session.
+3. **Offline Grace Period (30 Days)**:
+   - If the developer has no internet connection (e.g. airplane or remote field work), the Desktop App verifies the stored cryptographic JWT token locally.
+   - Code sync and P2P LAN collaboration function 100% offline without blocking work.
+
+---
+
+## ⚡ Tier Feature Gating & Quotas
+
+| Feature | Free Tier | Pro Tier | Enterprise Tier |
+| :--- | :--- | :--- | :--- |
+| **Local P2P Sync** | Unlimited local diff sync | Unlimited local diff sync | Unlimited local diff sync |
+| **Max LAN/Mesh Peers** | Up to 3 active peers | Unlimited team mesh peers | Unlimited team mesh peers |
+| **Encrypted Relay Storage** | 100 MB Dead Drop (7-day TTL) | 5 GB Dead Drop (30-day TTL) | Custom Dedicated Relay Vault |
+| **Identity Verification** | Standard Ed25519 | Standard Ed25519 | SSO / SAML + Custom Domain |
+| **Telemetry & Leaderboard** | Basic | Live Flow State & Analytics | Executive Compliance Reporting |
+
+---
+
+## 🛠️ Verification & Implementation Steps
+
+### 1. Control Server Webhook / Validator Integration
+- Implement `WebsiteValidator` struct in [`services/control-server/internal/license/license.go`](file:///c:/Users/admin/Desktop/orbit-app/services/control-server/internal/license/license.go) to communicate with the Website Server URL configured in `config.go`.
+
+### 2. Desktop UI Offline License Caching
+- Ensure [`AuthPage.tsx`](file:///c:/Users/admin/Desktop/orbit-app/apps/desktop-ui/src/components/AuthPage.tsx) and [`App.tsx`](file:///c:/Users/admin/Desktop/orbit-app/apps/desktop-ui/src/App.tsx) cache validated license claims locally for seamless offline startup.
+
+### 3. Tier Quota Checks in Daemon & Relay
+- Enforce peer counts and dead drop size limits in [`project_handler.go`](file:///c:/Users/admin/Desktop/orbit-app/services/control-server/internal/handlers/project_handler.go) based on `user.PlanTier`.
