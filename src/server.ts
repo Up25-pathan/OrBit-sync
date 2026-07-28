@@ -19,9 +19,11 @@ const PORT = process.env.PORT || 5000;
 
 const allowedOrigins = [
   process.env.CLIENT_URL,
+  process.env.FRONTEND_URL,
   'http://localhost:3000',
   'http://localhost:9090',
   'https://orbit-sync.onrender.com',
+  'https://orbitcollab-three.vercel.app',
   'https://orbit-server-kae6.onrender.com',
   'tauri://localhost',
   'https://tauri.localhost',
