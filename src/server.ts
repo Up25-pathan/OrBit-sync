@@ -1,4 +1,5 @@
 import express from 'express';
+import helmet from 'helmet';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import dns from 'dns';
@@ -8,6 +9,7 @@ import licenseRouter from './routes/license';
 import billingRouter from './routes/billing';
 import adminRouter from './routes/admin';
 import updaterRouter from './routes/updater';
+import { prisma } from './db';
 
 // Force DNS resolver to prefer IPv4 over IPv6 (fixes Render ENETUNREACH socket connect errors)
 dns.setDefaultResultOrder('ipv4first');
@@ -16,6 +18,9 @@ dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 5000;
+
+// Security headers
+app.use(helmet());
 
 const allowedOrigins = [
   process.env.CLIENT_URL,
@@ -84,10 +89,29 @@ app.use((err: any, req: express.Request, res: express.Response, next: express.Ne
 });
 
 // Start Server
-app.listen(PORT, () => {
+const server = app.listen(PORT, () => {
   console.log(`=============================================`);
   console.log(` OrBit API Server running on port ${PORT}`);
   console.log(` Client Origin: ${process.env.CLIENT_URL || 'http://localhost:3000'}`);
   console.log(` SQLite Database: Active`);
   console.log(`=============================================`);
 });
+
+// Graceful shutdown on SIGTERM/SIGINT (Render sends SIGTERM on restart)
+async function shutdown(signal: string) {
+  console.log(`\n[${signal}] Shutting down gracefully...`);
+  server.close(async () => {
+    console.log('[Server] HTTP server closed.');
+    await prisma.$disconnect();
+    console.log('[Server] Database connection closed.');
+    process.exit(0);
+  });
+  // Force exit after 10s if graceful shutdown hangs
+  setTimeout(() => {
+    console.error('[Server] Forced shutdown after timeout.');
+    process.exit(1);
+  }, 10000).unref();
+}
+
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));

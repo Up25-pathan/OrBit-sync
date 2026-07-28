@@ -4,9 +4,22 @@ import { prisma } from '../db';
 import { normalizeTier } from '../utils/licenseGenerator';
 
 const router = Router();
-const JWT_SECRET = process.env.JWT_SECRET || 'orbit-secret-key-signature-token-safe-random-2026';
+const JWT_SECRET = process.env.JWT_SECRET;
+if (!JWT_SECRET) {
+  console.error('=============================================');
+  console.error('  CRITICAL: JWT_SECRET env var not set!');
+  console.error('=============================================');
+}
+const JWT_SECRET_FALLBACK = JWT_SECRET || 'dev-only-insecure-fallback-change-me';
 
-const CONTROL_SERVER_SECRET = process.env.CONTROL_SERVER_SECRET || 'orbit-control-server-verification-secret-2026';
+const CONTROL_SERVER_SECRET = process.env.CONTROL_SERVER_SECRET;
+if (!CONTROL_SERVER_SECRET) {
+  console.error('=============================================');
+  console.error('  CRITICAL: CONTROL_SERVER_SECRET env var not set!');
+  console.error('  Set a strong random value in production.');
+  console.error('=============================================');
+}
+const CONTROL_SERVER_SECRET_FALLBACK = CONTROL_SERVER_SECRET || 'dev-only-insecure-cs-secret';
 
 // ----------------------------------------------------
 // 1. PUBLIC CONTROL SERVER LICENSE VERIFICATION ENDPOINT
@@ -15,7 +28,7 @@ const CONTROL_SERVER_SECRET = process.env.CONTROL_SERVER_SECRET || 'orbit-contro
 router.get('/verify', async (req: Request, res: Response) => {
   try {
     const serverSecretHeader = req.headers['x-control-server-secret'];
-    if (process.env.NODE_ENV === 'production' && CONTROL_SERVER_SECRET && serverSecretHeader !== CONTROL_SERVER_SECRET) {
+    if (process.env.NODE_ENV === 'production' && serverSecretHeader !== CONTROL_SERVER_SECRET_FALLBACK) {
       return res.status(401).json({
         valid: false,
         status: 'UNAUTHORIZED',
@@ -228,7 +241,7 @@ async function handleDeviceHandshake(req: Request, res: Response) {
         expiresAt: subscription.expiresAt.toISOString(),
         deviceId,
       },
-      JWT_SECRET,
+      JWT_SECRET_FALLBACK,
       { expiresIn: '30d' }
     );
 

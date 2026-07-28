@@ -1,4 +1,4 @@
-import { Router, Request, Response } from 'express';
+import { Router, Request, Response, NextFunction } from 'express';
 import crypto from 'crypto';
 import nodemailer from 'nodemailer';
 import dns from 'dns';
@@ -8,11 +8,52 @@ import { generateLicenseKey, normalizeTier } from '../utils/licenseGenerator';
 
 const router = Router();
 
+// In-memory rate limiter for auth endpoints (keyed by IP)
+const rateLimitMap = new Map<string, { count: number; resetAt: number }>();
+function rateLimit(maxRequests: number, windowMs: number) {
+  return (req: Request, res: Response, next: NextFunction) => {
+    const ip = req.ip || req.socket.remoteAddress || 'unknown';
+    const now = Date.now();
+    const entry = rateLimitMap.get(ip);
+    if (!entry || now > entry.resetAt) {
+      rateLimitMap.set(ip, { count: 1, resetAt: now + windowMs });
+      return next();
+    }
+    if (entry.count >= maxRequests) {
+      return res.status(429).json({ error: 'Too many requests. Please try again later.' });
+    }
+    entry.count++;
+    next();
+  };
+}
+// Cleanup stale entries every 10 minutes
+setInterval(() => {
+  const now = Date.now();
+  for (const [key, entry] of rateLimitMap) {
+    if (now > entry.resetAt) rateLimitMap.delete(key);
+  }
+}, 600000).unref();
+
+const ALLOWED_ORIGINS = [
+  process.env.CLIENT_URL,
+  process.env.FRONTEND_URL,
+  'http://localhost:3000',
+  'http://localhost:9090',
+  'https://orbit-sync.onrender.com',
+  'https://orbitcollab-three.vercel.app',
+  'https://orbit-server-kae6.onrender.com',
+].filter((x): x is string => !!x);
+
 const resolveClientUrl = (req: Request): string => {
   const state = req.query.state as string;
   let dynamicUrl = '';
   if (state) {
-    try { dynamicUrl = JSON.parse(Buffer.from(state, 'base64').toString()).origin || ''; } catch (e) {}
+    try {
+      const parsed = JSON.parse(Buffer.from(state, 'base64').toString());
+      if (parsed.origin && ALLOWED_ORIGINS.some((o) => parsed.origin.startsWith(o))) {
+        dynamicUrl = parsed.origin;
+      }
+    } catch (e) {}
   }
   return dynamicUrl || process.env.CLIENT_URL || 'http://localhost:3000';
 };
@@ -76,7 +117,7 @@ async function provisionUserDefaultResources(tx: any, userId: string) {
 // ----------------------------------------------------
 
 // POST /api/auth/signup
-router.post('/signup', async (req: Request, res: Response) => {
+router.post('/signup', rateLimit(5, 60000), async (req: Request, res: Response) => {
   try {
     const { email, password, displayName } = req.body;
 
@@ -211,7 +252,7 @@ router.post('/signup', async (req: Request, res: Response) => {
 });
 
 // POST /api/auth/verify-code
-router.post('/verify-code', async (req: Request, res: Response) => {
+router.post('/verify-code', rateLimit(10, 60000), async (req: Request, res: Response) => {
   try {
     const { email, code } = req.body;
 
@@ -287,7 +328,7 @@ router.post('/verify-code', async (req: Request, res: Response) => {
 });
 
 // POST /api/auth/login
-router.post('/login', async (req: Request, res: Response) => {
+router.post('/login', rateLimit(10, 60000), async (req: Request, res: Response) => {
   try {
     const { email, password } = req.body;
 
@@ -354,6 +395,21 @@ router.post('/login', async (req: Request, res: Response) => {
 // SECTION B: GOOGLE & GITHUB OAUTH 2.0 REDIRECTS
 // ----------------------------------------------------
 
+// Sets JWT as httpOnly cookie and redirects without exposing token in URL
+function redirectWithSession(res: Response, clientUrl: string, token: string, email: string, role: string) {
+  const redirectUrl = new URL(`${clientUrl}/console`);
+  redirectUrl.searchParams.set('oauth_success', 'true');
+  redirectUrl.searchParams.set('email', email);
+  redirectUrl.searchParams.set('role', role);
+  res.cookie('orbit_session', token, {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === 'production',
+    sameSite: 'lax',
+    maxAge: 7 * 24 * 60 * 60 * 1000,
+  });
+  return res.redirect(redirectUrl.toString());
+}
+
 // GET /api/auth/google
 router.get('/google', (req: Request, res: Response) => {
   const origin = req.query.origin as string || '';
@@ -405,7 +461,7 @@ router.get('/google/callback', async (req: Request, res: Response) => {
       }
 
       const token = signToken({ id: user!.id, email: user!.email });
-      return res.redirect(`${clientUrl}/console?oauth_success=true&token=${token}&email=${user!.email}&role=${user!.role}`);
+      return redirectWithSession(res, clientUrl, token, user!.email, user!.role);
     }
 
     // 2. Real Google OAuth
@@ -443,7 +499,7 @@ router.get('/google/callback', async (req: Request, res: Response) => {
     }
 
     const token = signToken({ id: user!.id, email: user!.email });
-    return res.redirect(`${clientUrl}/console?oauth_success=true&token=${token}&email=${user!.email}&role=${user!.role}`);
+    return redirectWithSession(res, clientUrl, token, user!.email, user!.role);
 
   } catch (error: any) {
     console.error('Google OAuth callback error:', error);
@@ -476,7 +532,7 @@ router.get('/github/callback', async (req: Request, res: Response) => {
       }
 
       const token = signToken({ id: user!.id, email: user!.email });
-      return res.redirect(`${clientUrl}/console?oauth_success=true&token=${token}&email=${user!.email}&role=${user!.role}`);
+      return redirectWithSession(res, clientUrl, token, user!.email, user!.role);
     }
 
     // 2. Real GitHub OAuth
@@ -522,7 +578,7 @@ router.get('/github/callback', async (req: Request, res: Response) => {
     }
 
     const token = signToken({ id: user!.id, email: user!.email });
-    return res.redirect(`${clientUrl}/console?oauth_success=true&token=${token}&email=${user!.email}&role=${user!.role}`);
+    return redirectWithSession(res, clientUrl, token, user!.email, user!.role);
 
   } catch (error: any) {
     console.error('GitHub OAuth callback error:', error);

@@ -25,9 +25,32 @@ const storage = multer.diskStorage({
   },
 });
 
+const ALLOWED_MIME_TYPES = [
+  'application/zip',
+  'application/x-zip-compressed',
+  'application/octet-stream',
+  'application/x-msdownload',
+  'application/x-msi',
+  'application/x-apple-diskimage',
+  'application/vnd.apple.installer+xml',
+  'application/x-debian-package',
+  'application/x-redhat-package-manager',
+  'application/x-gzip',
+  'application/gzip',
+];
+
+const fileFilter = (req: any, file: Express.Multer.File, cb: (error: Error | null, acceptFile?: boolean) => void) => {
+  if (ALLOWED_MIME_TYPES.includes(file.mimetype) || file.originalname.endsWith('.zip') || file.originalname.endsWith('.dmg') || file.originalname.endsWith('.pkg') || file.originalname.endsWith('.exe') || file.originalname.endsWith('.msi') || file.originalname.endsWith('.deb') || file.originalname.endsWith('.rpm') || file.originalname.endsWith('.tar.gz') || file.originalname.endsWith('.AppImage')) {
+    cb(null, true);
+  } else {
+    cb(new Error('File type not allowed. Only installer/archive types are accepted.'));
+  }
+};
+
 const upload = multer({
   storage,
-  limits: { fileSize: 500 * 1024 * 1024 }, // 500MB max per binary payload
+  fileFilter,
+  limits: { fileSize: 500 * 1024 * 1024 },
 });
 
 export interface AdminAuthRequest extends Request {
@@ -109,10 +132,17 @@ router.post('/tickets/public', async (req: Request, res: Response) => {
 // Admin Bootstrap Endpoint (Allows promoting initial account to ADMIN during setup)
 router.post('/bootstrap', async (req: Request, res: Response) => {
   try {
-    const { email, bootstrapKey } = req.body;
-    const expectedKey = process.env.ADMIN_BOOTSTRAP_KEY || 'orbit_admin_super_secret_bootstrap_2026';
+    const { email, bootstrapKey: incomingBootstrapKey } = req.body;
+    const adminBootstrapKey = process.env.ADMIN_BOOTSTRAP_KEY;
+    if (!adminBootstrapKey) {
+      console.error('=============================================');
+      console.error('  CRITICAL: ADMIN_BOOTSTRAP_KEY env var not set!');
+      console.error('  Set a strong random value in production.');
+      console.error('=============================================');
+    }
+    const expectedKey = adminBootstrapKey || 'dev-only-insecure-bootstrap-key';
 
-    if (bootstrapKey !== expectedKey) {
+    if (incomingBootstrapKey !== expectedKey) {
       return res.status(401).json({ error: 'Invalid admin bootstrap secret key.' });
     }
 

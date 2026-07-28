@@ -2,7 +2,15 @@ import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
 import crypto from 'crypto';
 
-const JWT_SECRET = process.env.JWT_SECRET || 'orbit-secret-key-signature-token-safe-random-2026';
+const JWT_SECRET = process.env.JWT_SECRET;
+if (!JWT_SECRET) {
+  console.error('=============================================');
+  console.error('  CRITICAL: JWT_SECRET env var not set!');
+  console.error('  Set a strong random value in production.');
+  console.error('  Using INSECURE fallback for dev only.');
+  console.error('=============================================');
+}
+const JWT_SECRET_FALLBACK = JWT_SECRET || 'dev-only-insecure-fallback-change-me';
 
 export interface AuthRequest extends Request {
   user?: {
@@ -25,12 +33,12 @@ export function verifyPassword(password: string, stored: string): boolean {
 }
 
 export function signToken(payload: { id: string; email: string }): string {
-  return jwt.sign(payload, JWT_SECRET, { expiresIn: '7d' });
+  return jwt.sign(payload, JWT_SECRET_FALLBACK, { expiresIn: '7d' });
 }
 
 export function verifyToken(token: string): { id: string; email: string } | null {
   try {
-    return jwt.verify(token, JWT_SECRET) as { id: string; email: string };
+    return jwt.verify(token, JWT_SECRET_FALLBACK) as { id: string; email: string };
   } catch (e) {
     return null;
   }

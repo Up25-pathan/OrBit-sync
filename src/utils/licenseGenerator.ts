@@ -1,6 +1,13 @@
 import crypto from 'crypto';
 
-const LICENSE_SECRET = process.env.LICENSE_SECRET || 'orbit_secret_license_signing_key_2026';
+const LICENSE_SECRET = process.env.LICENSE_SECRET;
+if (!LICENSE_SECRET) {
+  console.error('=============================================');
+  console.error('  CRITICAL: LICENSE_SECRET env var not set!');
+  console.error('  Set a strong random value in production.');
+  console.error('=============================================');
+}
+const LICENSE_SECRET_FALLBACK = LICENSE_SECRET || 'dev-only-insecure-license-secret';
 
 export type PlanTier = 'free' | 'pro' | 'enterprise';
 
@@ -26,11 +33,11 @@ export function generateLicenseKey(tierInput: string): string {
 
   const payload = `${tier}-${randomHex}-${timestamp}`;
   const sigHex = crypto
-    .createHmac('sha256', LICENSE_SECRET)
+    .createHmac('sha256', LICENSE_SECRET_FALLBACK)
     .update(payload)
     .digest('hex')
     .substring(0, 6)
-    .toUpperCase(); // 6-char HMAC signature truncation
+    .toUpperCase();
 
   return `ORBIT-${tier}-${randomHex}-${timestamp}-${sigHex}`;
 }
@@ -57,7 +64,7 @@ export function parseLicenseKey(key: string): { isValid: boolean; planTier: Plan
 
     const payload = `${tierStr.toUpperCase()}-${randomHex}-${timestampStr}`;
     const expectedSig = crypto
-      .createHmac('sha256', LICENSE_SECRET)
+      .createHmac('sha256', LICENSE_SECRET_FALLBACK)
       .update(payload)
       .digest('hex')
       .substring(0, 6)

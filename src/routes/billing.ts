@@ -23,7 +23,6 @@ const stripe = stripeSecretKey ? new Stripe(stripeSecretKey, { apiVersion: '2024
 
 // PayPal credentials (We support standard checkout script, mock fallback if empty)
 const paypalClientId = process.env.PAYPAL_CLIENT_ID || '';
-const paypalClientSecret = process.env.PAYPAL_CLIENT_SECRET || '';
 
 
 // ----------------------------------------------------
