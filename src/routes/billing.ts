@@ -190,12 +190,13 @@ router.post('/stripe/session', authenticateJWT, async (req: AuthRequest, res: Re
     }
 
     // 1. SECURE STRIPE SANDBOX (If Stripe is not configured)
+    const clientUrl = req.get('origin') || process.env.CLIENT_URL || 'http://localhost:3000';
     if (!stripe) {
       console.log(`[Stripe Sandbox] Generating mock session redirect...`);
       return res.status(200).json({
         isSandbox: true,
         // Mock Stripe payment success route
-        url: `${process.env.CLIENT_URL || 'http://localhost:3000'}/console?checkout_success=true&gateway=stripe&tier=${planTier}`,
+        url: `${clientUrl}/console?checkout_success=true&gateway=stripe&tier=${planTier}`,
       });
     }
 
@@ -209,8 +210,8 @@ router.post('/stripe/session', authenticateJWT, async (req: AuthRequest, res: Re
       customer_email: user.email,
       line_items: [{ price: priceId, quantity: 1 }],
       mode: 'subscription',
-      success_url: `${process.env.CLIENT_URL || 'http://localhost:3000'}/console?checkout_success=true`,
-      cancel_url: `${process.env.CLIENT_URL || 'http://localhost:3000'}/checkout?plan=${planTier}`,
+      success_url: `${clientUrl}/console?checkout_success=true`,
+      cancel_url: `${clientUrl}/checkout?plan=${planTier}`,
       metadata: { userId, planTier },
     });
 

@@ -8,6 +8,15 @@ import { generateLicenseKey, normalizeTier } from '../utils/licenseGenerator';
 
 const router = Router();
 
+const resolveClientUrl = (req: Request): string => {
+  const state = req.query.state as string;
+  let dynamicUrl = '';
+  if (state) {
+    try { dynamicUrl = JSON.parse(Buffer.from(state, 'base64').toString()).origin || ''; } catch (e) {}
+  }
+  return dynamicUrl || process.env.CLIENT_URL || 'http://localhost:3000';
+};
+
 // Nodemailer SMTP setup
 const smtpHost = process.env.SMTP_HOST || '';
 const smtpPort = parseInt(process.env.SMTP_PORT || '587');
@@ -347,21 +356,27 @@ router.post('/login', async (req: Request, res: Response) => {
 
 // GET /api/auth/google
 router.get('/google', (req: Request, res: Response) => {
+  const origin = req.query.origin as string || '';
+  const state = origin ? Buffer.from(JSON.stringify({ origin })).toString('base64') : '';
+
   if (!process.env.GOOGLE_CLIENT_ID || !process.env.GOOGLE_REDIRECT_URI) {
     console.log('[Google OAuth Sandbox] No credentials found. Redirecting to sandbox callback...');
-    return res.redirect('/api/auth/google/callback');
+    return res.redirect(`/api/auth/google/callback?state=${encodeURIComponent(state)}`);
   }
-  const url = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${process.env.GOOGLE_CLIENT_ID}&redirect_uri=${encodeURIComponent(process.env.GOOGLE_REDIRECT_URI)}&response_type=code&scope=${encodeURIComponent('profile email')}`;
+  const url = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${process.env.GOOGLE_CLIENT_ID}&redirect_uri=${encodeURIComponent(process.env.GOOGLE_REDIRECT_URI)}&response_type=code&scope=${encodeURIComponent('profile email')}&state=${encodeURIComponent(state)}`;
   return res.redirect(url);
 });
 
 // GET /api/auth/github
 router.get('/github', (req: Request, res: Response) => {
+  const origin = req.query.origin as string || '';
+  const state = origin ? Buffer.from(JSON.stringify({ origin })).toString('base64') : '';
+
   if (!process.env.GITHUB_CLIENT_ID || !process.env.GITHUB_REDIRECT_URI) {
     console.log('[GitHub OAuth Sandbox] No credentials found. Redirecting to sandbox callback...');
-    return res.redirect('/api/auth/github/callback');
+    return res.redirect(`/api/auth/github/callback?state=${encodeURIComponent(state)}`);
   }
-  const url = `https://github.com/login/oauth/authorize?client_id=${process.env.GITHUB_CLIENT_ID}&redirect_uri=${encodeURIComponent(process.env.GITHUB_REDIRECT_URI)}&scope=${encodeURIComponent('user:email')}`;
+  const url = `https://github.com/login/oauth/authorize?client_id=${process.env.GITHUB_CLIENT_ID}&redirect_uri=${encodeURIComponent(process.env.GITHUB_REDIRECT_URI)}&scope=${encodeURIComponent('user:email')}&state=${encodeURIComponent(state)}`;
   return res.redirect(url);
 });
 
@@ -369,7 +384,7 @@ router.get('/github', (req: Request, res: Response) => {
 router.get('/google/callback', async (req: Request, res: Response) => {
   try {
     const code = req.query.code as string;
-    const clientUrl = process.env.CLIENT_URL || 'http://localhost:3000';
+    const clientUrl = resolveClientUrl(req);
 
     // 1. Sandbox Google login simulation
     if (!process.env.GOOGLE_CLIENT_ID || !code) {
@@ -432,7 +447,8 @@ router.get('/google/callback', async (req: Request, res: Response) => {
 
   } catch (error: any) {
     console.error('Google OAuth callback error:', error);
-    return res.redirect(`${process.env.CLIENT_URL || 'http://localhost:3000'}/login?error=Google OAuth failed`);
+    const clientUrl = resolveClientUrl(req);
+    return res.redirect(`${clientUrl}/login?error=Google OAuth failed`);
   }
 });
 
@@ -440,7 +456,7 @@ router.get('/google/callback', async (req: Request, res: Response) => {
 router.get('/github/callback', async (req: Request, res: Response) => {
   try {
     const code = req.query.code as string;
-    const clientUrl = process.env.CLIENT_URL || 'http://localhost:3000';
+    const clientUrl = resolveClientUrl(req);
 
     // 1. Sandbox GitHub login simulation
     if (!process.env.GITHUB_CLIENT_ID || !code) {
@@ -510,7 +526,8 @@ router.get('/github/callback', async (req: Request, res: Response) => {
 
   } catch (error: any) {
     console.error('GitHub OAuth callback error:', error);
-    return res.redirect(`${process.env.CLIENT_URL || 'http://localhost:3000'}/login?error=GitHub OAuth failed`);
+    const clientUrl = resolveClientUrl(req);
+    return res.redirect(`${clientUrl}/login?error=GitHub OAuth failed`);
   }
 });
 

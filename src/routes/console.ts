@@ -107,10 +107,37 @@ router.post('/devices/revoke', authenticateJWT, async (req: AuthRequest, res: Re
       where: { id: deviceRowId },
     });
 
-    return res.status(200).json({ success: true, message: 'Device authorization revoked.' });
-  } catch (error: any) {
-    console.error('Revoke device error:', error);
-    return res.status(500).json({ error: 'Internal server error revoking device.' });
+    return res.status(200).json({
+      message: 'License key is permanently locked for Beta launch. Self-service key rotation is disabled.',
+    });
+  } catch (err: any) {
+    return res.status(500).json({ error: 'Failed to process request.' });
+  }
+});
+
+// POST /tickets (Public / Desktop App Bug Report submission)
+router.post('/tickets', async (req: any, res: Response) => {
+  try {
+    const { name, email, subject, message } = req.body;
+
+    if (!subject || !message) {
+      return res.status(400).json({ error: 'Subject and message content are required.' });
+    }
+
+    const ticket = await prisma.supportTicket.create({
+      data: {
+        name: name ? String(name).trim() : 'OrBit Desktop Client User',
+        email: email ? String(email).trim() : 'client-report@orbit-sync.com',
+        subject: String(subject).trim(),
+        message: String(message).trim(),
+        status: 'OPEN',
+      },
+    });
+
+    return res.status(201).json({ success: true, ticket });
+  } catch (err: any) {
+    console.error('Error submitting bug report ticket:', err);
+    return res.status(500).json({ error: 'Failed to submit bug report.' });
   }
 });
 
