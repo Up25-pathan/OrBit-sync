@@ -19,7 +19,7 @@ if (!CONTROL_SERVER_SECRET) {
   console.error('  Set a strong random value in production.');
   console.error('=============================================');
 }
-const CONTROL_SERVER_SECRET_FALLBACK = CONTROL_SERVER_SECRET || 'dev-only-insecure-cs-secret';
+const CONTROL_SERVER_SECRET_FALLBACK = CONTROL_SERVER_SECRET || 'orbit-control-server-verification-secret-2026';
 
 // ----------------------------------------------------
 // 1. PUBLIC CONTROL SERVER LICENSE VERIFICATION ENDPOINT
