@@ -123,16 +123,23 @@ function ConsoleContent() {
   useEffect(() => {
     setIsClient(true);
 
-    // Check for incoming Google/GitHub OAuth redirect credentials
+    // Check for incoming Google/GitHub OAuth redirect (token is in httpOnly cookie, not URL)
     const oauthSuccess = searchParams.get('oauth_success');
-    const oauthToken = searchParams.get('token');
-    const oauthEmail = searchParams.get('email');
 
-    if (oauthSuccess === 'true' && oauthToken && oauthEmail) {
+    if (oauthSuccess === 'true') {
+      const oauthToken = searchParams.get('token');
+      const oauthEmail = searchParams.get('email');
       const oauthRole = searchParams.get('role') || 'USER';
-      localStorage.setItem('orbit_user', JSON.stringify({ email: oauthEmail, token: oauthToken, role: oauthRole }));
-      window.dispatchEvent(new Event('storage'));
-      // Clean query parameters from URL path
+
+      if (oauthToken && oauthEmail) {
+        localStorage.setItem('orbit_user', JSON.stringify({ email: oauthEmail, token: oauthToken, role: oauthRole }));
+        window.dispatchEvent(new Event('storage'));
+        setUserEmail(oauthEmail);
+        setProfileEmail(oauthEmail);
+        setUserRole(oauthRole as 'USER' | 'ADMIN');
+        
+        fetchDashboardData();
+      }
       router.replace('/console');
       return;
     }
