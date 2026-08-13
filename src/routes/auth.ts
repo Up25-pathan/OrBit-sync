@@ -115,7 +115,7 @@ async function provisionUserDefaultResources(tx: any, userId: string) {
 // Background Email Helper Definition
 const sendVerificationEmail = async (targetEmail: string, verificationCode: string) => {
   const brevoKey = process.env.BREVO_API_KEY;
-  const senderEmail = process.env.SMTP_USER || 'security@orbit.dev';
+  const senderEmail = process.env.SMTP_FROM_EMAIL || process.env.SMTP_USER || 'security@orbit.dev';
 
   const subject = 'OrBit Portal - Verify Your Email';
   const htmlContent = `
