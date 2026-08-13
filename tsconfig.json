@@ -1,7 +1,7 @@
 {
   "compilerOptions": {
     "target": "es2022",
-    "module": "node16",
+    "module": "commonjs",
     "lib": ["es2022"],
     "allowJs": true,
     "outDir": "./dist",
@@ -11,7 +11,7 @@
     "esModuleInterop": true,
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
-    "moduleResolution": "node16"
+    "moduleResolution": "node"
   },
   "include": ["src/**/*"]
 }
