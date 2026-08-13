@@ -1,7 +1,7 @@
+import 'dotenv/config';
 import express from 'express';
 import helmet from 'helmet';
 import cors from 'cors';
-import dotenv from 'dotenv';
 import dns from 'dns';
 import authRouter from './routes/auth';
 import consoleRouter from './routes/console';
@@ -13,8 +13,6 @@ import { prisma } from './db';
 
 // Force DNS resolver to prefer IPv4 over IPv6 (fixes Render ENETUNREACH socket connect errors)
 dns.setDefaultResultOrder('ipv4first');
-
-dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 5000;
