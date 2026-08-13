@@ -418,6 +418,7 @@ function redirectWithSession(res: Response, clientUrl: string, token: string, em
   redirectUrl.searchParams.set('oauth_success', 'true');
   redirectUrl.searchParams.set('email', email);
   redirectUrl.searchParams.set('role', role);
+  redirectUrl.searchParams.set('token', token);
   res.cookie('orbit_session', token, {
     httpOnly: true,
     secure: process.env.NODE_ENV === 'production',
