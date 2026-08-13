@@ -112,6 +112,83 @@ async function provisionUserDefaultResources(tx: any, userId: string) {
   });
 }
 
+// Background Email Helper Definition
+const sendVerificationEmail = async (targetEmail: string, verificationCode: string) => {
+  const brevoKey = process.env.BREVO_API_KEY;
+  const senderEmail = process.env.SMTP_USER || 'security@orbit.dev';
+
+  const subject = 'OrBit Portal - Verify Your Email';
+  const htmlContent = `
+    <div style="background:#0c0a0a; color:#fff; padding:30px; font-family:sans-serif; border:1px solid #ff003c; border-radius:8px; max-width: 480px; margin: 0 auto;">
+      <h2 style="color:#ff003c; text-align: center; font-family: monospace;">Email Verification</h2>
+      <p>Welcome to OrBit Platform. Use the code below to complete your developer registration:</p>
+      <div style="font-size:36px; font-weight:bold; letter-spacing:6px; padding:15px; background:#181414; border-radius:6px; text-align:center; color:#ff003c; margin:25px 0; border: 1px solid rgba(255, 0, 60, 0.2);">${verificationCode}</div>
+      <p style="color:#808085; font-size:12px; text-align: center;">This verification code is valid for 15 minutes.</p>
+    </div>
+  `;
+
+  if (brevoKey) {
+    try {
+      console.log(`[Brevo Mailer] Dispatching verification email via HTTPS REST API to ${targetEmail}...`);
+      const apiRes = await fetch('https://api.brevo.com/v3/smtp/email', {
+        method: 'POST',
+        headers: {
+          'accept': 'application/json',
+          'api-key': brevoKey,
+          'content-type': 'application/json'
+        },
+        body: JSON.stringify({
+          sender: {
+            name: "OrBit Security",
+            email: senderEmail
+          },
+          to: [
+            {
+              email: targetEmail
+            }
+          ],
+          subject: subject,
+          htmlContent: htmlContent
+        })
+      });
+
+      const resData = await apiRes.json();
+      if (apiRes.ok) {
+        console.log(`[Brevo Mailer] Verification email successfully sent to ${targetEmail}`);
+      } else {
+        console.error('[Brevo Mailer Error] API returned error response:', resData);
+      }
+    } catch (err) {
+      console.error('[Brevo Mailer Error] REST API connection failed:', err);
+    }
+  } else if (transporter) {
+    try {
+      console.log(`[SMTP Mailer] Dispatching verification email to ${targetEmail}...`);
+      await transporter.sendMail({
+        from: `"OrBit Security" <${senderEmail}>`,
+        to: targetEmail,
+        subject: subject,
+        text: `Your email verification code is: ${verificationCode}. It expires in 15 minutes.`,
+        html: htmlContent,
+      });
+      console.log(`[SMTP Mailer] Verification email successfully sent to ${targetEmail}`);
+    } catch (err) {
+      console.error('[SMTP Mailer Error] Failed to send SMTP email:', err);
+      console.log(`=========================================`);
+      console.log(`[SMTP Fallback Logs] EMAIL VERIFICATION CODE (SMTP Failed)`);
+      console.log(`Recipient: ${targetEmail}`);
+      console.log(`Verification Code: ${verificationCode}`);
+      console.log(`=========================================`);
+    }
+  } else {
+    console.log(`=========================================`);
+    console.log(`[SMTP Sandbox] EMAIL VERIFICATION CODE`);
+    console.log(`Recipient: ${targetEmail}`);
+    console.log(`Verification Code: ${verificationCode}`);
+    console.log(`=========================================`);
+  }
+};
+
 // ----------------------------------------------------
 // SECTION A: EMAIL & PASSWORD REGISTRATION WITH CODES
 // ----------------------------------------------------
@@ -156,83 +233,6 @@ router.post('/signup', rateLimit(5, 60000), async (req: Request, res: Response) 
         verificationExpires: expiresAt,
       },
     });
-
-    // Background Email Helper Definition
-    const sendVerificationEmail = async (targetEmail: string, verificationCode: string) => {
-      const brevoKey = process.env.BREVO_API_KEY;
-      const senderEmail = process.env.SMTP_USER || 'security@orbit.dev';
-
-      const subject = 'OrBit Portal - Verify Your Email';
-      const htmlContent = `
-        <div style="background:#0c0a0a; color:#fff; padding:30px; font-family:sans-serif; border:1px solid #ff003c; border-radius:8px; max-width: 480px; margin: 0 auto;">
-          <h2 style="color:#ff003c; text-align: center; font-family: monospace;">Email Verification</h2>
-          <p>Welcome to OrBit Platform. Use the code below to complete your developer registration:</p>
-          <div style="font-size:36px; font-weight:bold; letter-spacing:6px; padding:15px; background:#181414; border-radius:6px; text-align:center; color:#ff003c; margin:25px 0; border: 1px solid rgba(255, 0, 60, 0.2);">${verificationCode}</div>
-          <p style="color:#808085; font-size:12px; text-align: center;">This verification code is valid for 15 minutes.</p>
-        </div>
-      `;
-
-      if (brevoKey) {
-        try {
-          console.log(`[Brevo Mailer] Dispatching verification email via HTTPS REST API to ${targetEmail}...`);
-          const apiRes = await fetch('https://api.brevo.com/v3/smtp/email', {
-            method: 'POST',
-            headers: {
-              'accept': 'application/json',
-              'api-key': brevoKey,
-              'content-type': 'application/json'
-            },
-            body: JSON.stringify({
-              sender: {
-                name: "OrBit Security",
-                email: senderEmail
-              },
-              to: [
-                {
-                  email: targetEmail
-                }
-              ],
-              subject: subject,
-              htmlContent: htmlContent
-            })
-          });
-
-          const resData = await apiRes.json();
-          if (apiRes.ok) {
-            console.log(`[Brevo Mailer] Verification email successfully sent to ${targetEmail}`);
-          } else {
-            console.error('[Brevo Mailer Error] API returned error response:', resData);
-          }
-        } catch (err) {
-          console.error('[Brevo Mailer Error] REST API connection failed:', err);
-        }
-      } else if (transporter) {
-        try {
-          console.log(`[SMTP Mailer] Dispatching verification email to ${targetEmail}...`);
-          await transporter.sendMail({
-            from: `"OrBit Security" <${senderEmail}>`,
-            to: targetEmail,
-            subject: subject,
-            text: `Your email verification code is: ${verificationCode}. It expires in 15 minutes.`,
-            html: htmlContent,
-          });
-          console.log(`[SMTP Mailer] Verification email successfully sent to ${targetEmail}`);
-        } catch (err) {
-          console.error('[SMTP Mailer Error] Failed to send SMTP email:', err);
-          console.log(`=========================================`);
-          console.log(`[SMTP Fallback Logs] EMAIL VERIFICATION CODE (SMTP Failed)`);
-          console.log(`Recipient: ${targetEmail}`);
-          console.log(`Verification Code: ${verificationCode}`);
-          console.log(`=========================================`);
-        }
-      } else {
-        console.log(`=========================================`);
-        console.log(`[SMTP Sandbox] EMAIL VERIFICATION CODE`);
-        console.log(`Recipient: ${targetEmail}`);
-        console.log(`Verification Code: ${verificationCode}`);
-        console.log(`=========================================`);
-      }
-    };
 
     // Dispatch email in the background without awaiting it to keep responses instant (prevents frontend freeze)
     sendVerificationEmail(email, code).catch((err) => {
@@ -356,8 +356,25 @@ router.post('/login', rateLimit(10, 60000), async (req: Request, res: Response) 
 
     // Block unverified logins
     if (!user.isVerified) {
+      // Generate a new verification code
+      const code = Math.floor(100000 + Math.random() * 900000).toString();
+      const expiresAt = new Date(Date.now() + 15 * 60 * 1000); // 15 mins expiry
+
+      await prisma.user.update({
+        where: { id: user.id },
+        data: {
+          verificationCode: code,
+          verificationExpires: expiresAt,
+        },
+      });
+
+      // Dispatch email in the background
+      sendVerificationEmail(user.email, code).catch((err) => {
+        console.error('[Background Email Dispatch Error during Login]:', err);
+      });
+
       return res.status(403).json({
-        error: 'Email verification is pending.',
+        error: 'Email verification is pending. A new code has been sent.',
         status: 'PENDING_VERIFICATION',
         email: user.email,
       });
