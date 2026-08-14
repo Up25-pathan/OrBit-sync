@@ -1,7 +1,8 @@
 import { Response } from 'express';
 import crypto from 'crypto';
 import { prisma } from '../db';
-import { AuthRequest, authenticateJWT } from '../auth';
+import { AuthRequest, authenticateJWT, hashPassword } from '../auth';
+import { generateLicenseKey } from '../utils/licenseGenerator';
 
 const express = require('express');
 const router = express.Router();
@@ -32,17 +33,30 @@ router.get('/dashboard', authenticateJWT, async (req: AuthRequest, res: Response
       return res.status(404).json({ error: 'User not found.' });
     }
 
+    let userLicense = user.license;
+    if (!userLicense) {
+      const generatedKey = generateLicenseKey(user.subscription?.planTier || 'free');
+      userLicense = await prisma.license.create({
+        data: {
+          userId,
+          licenseKey: generatedKey,
+          maxDevices: user.subscription?.planTier === 'enterprise' ? 9999 : 3,
+        },
+        include: { devices: true },
+      });
+    }
+
     return res.status(200).json({
       user: {
         email: user.email,
+        displayName: user.displayName,
+        avatarUrl: user.avatarUrl,
         role: user.role,
       },
-      license: user.license
-        ? {
-            licenseKey: user.license.licenseKey,
-            maxDevices: user.license.maxDevices,
-          }
-        : null,
+      license: {
+        licenseKey: userLicense.licenseKey,
+        maxDevices: userLicense.maxDevices,
+      },
       subscription: user.subscription
         ? {
             planTier: user.subscription.planTier,
@@ -50,8 +64,8 @@ router.get('/dashboard', authenticateJWT, async (req: AuthRequest, res: Response
             expiresAt: user.subscription.expiresAt,
           }
         : null,
-      devices: user.license?.devices
-        ? user.license.devices.map((dev) => ({
+      devices: userLicense.devices
+        ? userLicense.devices.map((dev) => ({
             id: dev.id,
             hostname: dev.hostname || 'unknown-host',
             platform: dev.platform,
@@ -60,10 +74,58 @@ router.get('/dashboard', authenticateJWT, async (req: AuthRequest, res: Response
             lastSeen: new Date(dev.lastSeen).toISOString(),
           }))
         : [],
+      invoices: (user.subscription && user.subscription.planTier !== 'free' && user.subscription.planTier !== 'Free Tier')
+        ? [
+            {
+              id: `INV-${new Date(user.createdAt).getFullYear()}-001`,
+              date: new Date(user.createdAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
+              amount: user.subscription.planTier === 'mesh' ? '$24.00' : '$9.00',
+              status: user.subscription.status === 'active' ? 'PAID' : 'PENDING',
+            },
+          ]
+        : [],
     });
   } catch (error: any) {
     console.error('Fetch dashboard error:', error);
     return res.status(500).json({ error: 'Internal server error fetching dashboard.' });
+  }
+});
+
+// POST /api/console/profile/update
+router.post('/profile/update', authenticateJWT, async (req: AuthRequest, res: Response) => {
+  try {
+    const userId = req.user?.id;
+    const { displayName, avatarUrl, newPassword } = req.body;
+
+    if (!userId) {
+      return res.status(401).json({ error: 'Unauthorized.' });
+    }
+
+    const updateData: any = {};
+    if (displayName !== undefined) updateData.displayName = String(displayName).trim();
+    if (avatarUrl !== undefined) updateData.avatarUrl = String(avatarUrl).trim();
+    if (newPassword && String(newPassword).trim().length > 0) {
+      updateData.passwordHash = hashPassword(String(newPassword).trim());
+    }
+
+    const updatedUser = await prisma.user.update({
+      where: { id: userId },
+      data: updateData,
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: 'Profile updated successfully.',
+      user: {
+        email: updatedUser.email,
+        displayName: updatedUser.displayName,
+        avatarUrl: updatedUser.avatarUrl,
+        role: updatedUser.role,
+      },
+    });
+  } catch (err: any) {
+    console.error('Error updating profile:', err);
+    return res.status(500).json({ error: 'Failed to update profile settings.' });
   }
 });
 
