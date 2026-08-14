@@ -677,7 +677,7 @@ router.post('/releases/upload', uploadFields, async (req: Request, res: Response
 
 // GET /api/v1/admin/control-server/status
 router.get('/control-server/status', requireAdmin, async (req: AdminAuthRequest, res: Response) => {
-  const controlServerUrl = process.env.CONTROL_SERVER_URL || 'https://orbit-server-kae6.onrender.com';
+  const controlServerUrl = process.env.CONTROL_SERVER_URL || 'https://orbit-server-ymao.onrender.com';
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 2000);
 
@@ -723,7 +723,7 @@ router.get('/control-server/status', requireAdmin, async (req: AdminAuthRequest,
 
 // POST /api/v1/admin/control-server/sweep
 router.post('/control-server/sweep', requireAdmin, async (req: AdminAuthRequest, res: Response) => {
-  const controlServerUrl = process.env.CONTROL_SERVER_URL || 'https://orbit-server-kae6.onrender.com';
+  const controlServerUrl = process.env.CONTROL_SERVER_URL || 'https://orbit-server-ymao.onrender.com';
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 2000);
 

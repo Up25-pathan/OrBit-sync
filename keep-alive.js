@@ -1,4 +1,4 @@
-const SERVER_URL = process.env.SERVER_URL || "https://orbit-server-kae6.onrender.com";
+const SERVER_URL = process.env.SERVER_URL || "https://orbit-server-ymao.onrender.com";
 const PING_INTERVAL_MS = 5 * 60 * 1000;
 
 async function ping() {

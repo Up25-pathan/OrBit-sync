@@ -41,7 +41,7 @@ const ALLOWED_ORIGINS = [
   'http://localhost:9090',
   'https://orbit-sync.onrender.com',
   'https://orbitcollab-three.vercel.app',
-  'https://orbit-server-kae6.onrender.com',
+  'https://orbit-server-ymao.onrender.com',
 ].filter((x): x is string => !!x);
 
 const resolveClientUrl = (req: Request): string => {

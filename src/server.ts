@@ -27,7 +27,7 @@ const allowedOrigins = [
   'http://localhost:9090',
   'https://orbit-sync.onrender.com',
   'https://orbitcollab-three.vercel.app',
-  'https://orbit-server-kae6.onrender.com',
+  'https://orbit-server-ymao.onrender.com',
   'tauri://localhost',
   'https://tauri.localhost',
 ].filter(Boolean) as string[];
