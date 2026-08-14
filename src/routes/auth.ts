@@ -434,6 +434,10 @@ router.get('/google', (req: Request, res: Response) => {
   const state = origin ? Buffer.from(JSON.stringify({ origin })).toString('base64') : '';
 
   if (!process.env.GOOGLE_CLIENT_ID || !process.env.GOOGLE_REDIRECT_URI) {
+    if (process.env.NODE_ENV === 'production') {
+      const clientUrl = resolveClientUrl(req);
+      return res.redirect(`${clientUrl}/login?error=Google OAuth is not configured on the server. Please set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET.`);
+    }
     console.log('[Google OAuth Sandbox] No credentials found. Redirecting to sandbox callback...');
     return res.redirect(`/api/auth/google/callback?state=${encodeURIComponent(state)}`);
   }
@@ -447,7 +451,11 @@ router.get('/github', (req: Request, res: Response) => {
   const state = origin ? Buffer.from(JSON.stringify({ origin })).toString('base64') : '';
 
   if (!process.env.GITHUB_CLIENT_ID || !process.env.GITHUB_REDIRECT_URI) {
-    console.log('[GitHub OAuth Sandbox] No credentials found. Redirecting to sandbox callback...');
+    if (process.env.NODE_ENV === 'production') {
+      const clientUrl = resolveClientUrl(req);
+      return res.redirect(`${clientUrl}/login?error=GitHub OAuth is not configured on the server. Please set GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET.`);
+    }
+    console.log('[GitHub OAuth Sandbox] No credentials found. Redirecting to local sandbox callback...');
     return res.redirect(`/api/auth/github/callback?state=${encodeURIComponent(state)}`);
   }
   const url = `https://github.com/login/oauth/authorize?client_id=${process.env.GITHUB_CLIENT_ID}&redirect_uri=${encodeURIComponent(process.env.GITHUB_REDIRECT_URI)}&scope=${encodeURIComponent('user:email')}&state=${encodeURIComponent(state)}`;
@@ -572,16 +580,31 @@ router.get('/github/callback', async (req: Request, res: Response) => {
 
     // Fetch user profile from GitHub
     const userRes = await fetch('https://api.github.com/user', {
-      headers: { Authorization: `Bearer ${tokens.access_token}` },
+      headers: {
+        Authorization: `Bearer ${tokens.access_token}`,
+        'User-Agent': 'OrBit-Sync-App',
+      },
     });
     const userProfile = (await userRes.json()) as any;
 
     // Fetch user email
-    const emailsRes = await fetch('https://api.github.com/user/emails', {
-      headers: { Authorization: `Bearer ${tokens.access_token}` },
-    });
-    const emails = (await emailsRes.json()) as any;
-    const primaryEmail = emails.find((e: any) => e.primary)?.email || userProfile.email || `${userProfile.login}@github.com`;
+    let primaryEmail = userProfile.email;
+    try {
+      const emailsRes = await fetch('https://api.github.com/user/emails', {
+        headers: {
+          Authorization: `Bearer ${tokens.access_token}`,
+          'User-Agent': 'OrBit-Sync-App',
+        },
+      });
+      const emails = (await emailsRes.json()) as any;
+      if (Array.isArray(emails)) {
+        primaryEmail = emails.find((e: any) => e.primary)?.email || emails[0]?.email || primaryEmail;
+      }
+    } catch (e) {}
+
+    if (!primaryEmail) {
+      primaryEmail = userProfile.login ? `${userProfile.login}@github.com` : `user_${Date.now()}@github.com`;
+    }
 
     let user = await prisma.user.findUnique({ where: { email: primaryEmail }, include: { license: true, subscription: true } });
 
