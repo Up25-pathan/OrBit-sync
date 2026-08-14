@@ -50,7 +50,7 @@ router.get('/dashboard', authenticateJWT, async (req: AuthRequest, res: Response
       user: {
         email: user.email,
         displayName: user.displayName,
-        avatarUrl: user.avatarUrl,
+        avatarUrl: (user as any).avatarUrl || null,
         role: user.role,
       },
       license: {
@@ -87,7 +87,7 @@ router.get('/dashboard', authenticateJWT, async (req: AuthRequest, res: Response
     });
   } catch (error: any) {
     console.error('Fetch dashboard error:', error);
-    return res.status(500).json({ error: 'Internal server error fetching dashboard.' });
+    return res.status(500).json({ error: 'Failed to fetch dashboard data.' });
   }
 });
 
@@ -119,7 +119,7 @@ router.post('/profile/update', authenticateJWT, async (req: AuthRequest, res: Re
       user: {
         email: updatedUser.email,
         displayName: updatedUser.displayName,
-        avatarUrl: updatedUser.avatarUrl,
+        avatarUrl: (updatedUser as any).avatarUrl || null,
         role: updatedUser.role,
       },
     });
