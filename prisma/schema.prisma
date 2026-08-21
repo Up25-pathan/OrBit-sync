@@ -11,6 +11,7 @@ model User {
   id                  String        @id @default(uuid())
   email               String        @unique
   displayName         String?
+  avatarUrl           String?
   passwordHash        String
   role                String        @default("USER") // "USER", "ADMIN"
   isVerified          Boolean       @default(false)

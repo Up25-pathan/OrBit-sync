@@ -50,7 +50,7 @@ router.get('/dashboard', authenticateJWT, async (req: AuthRequest, res: Response
       user: {
         email: user.email,
         displayName: user.displayName,
-        avatarUrl: (user as any).avatarUrl || null,
+        avatarUrl: user.avatarUrl || null,
         role: user.role,
       },
       license: {

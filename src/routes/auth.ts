@@ -670,6 +670,7 @@ router.get('/me', async (req: Request, res: Response) => {
         id: user.id,
         email: user.email,
         displayName: user.displayName || user.email.split('@')[0],
+        avatarUrl: user.avatarUrl || null,
         role: user.role,
         licenseKey: user.license?.licenseKey || '',
         planTier: normalizeTier(user.subscription?.planTier || 'free'),
