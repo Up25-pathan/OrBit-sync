@@ -17,8 +17,12 @@ dns.setDefaultResultOrder('ipv4first');
 const app = express();
 const PORT = process.env.PORT || 5000;
 
-// Security headers
-app.use(helmet());
+// Security headers (relaxed cross-origin policies to allow Vercel frontend + desktop app)
+app.use(helmet({
+  crossOriginResourcePolicy: false,
+  crossOriginEmbedderPolicy: false,
+  crossOriginOpenerPolicy: false,
+}));
 
 const allowedOrigins = [
   process.env.CLIENT_URL,
@@ -41,7 +45,9 @@ app.use(cors({
       callback(new Error('Cross-Origin Access Denied by OrBit Security Policy'));
     }
   },
-  credentials: true
+  credentials: true,
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Control-Server-Secret'],
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
 }));
 
 // Route Stripe Webhook directly to parse raw request buffers (Stripe SDK signature checks require this)
