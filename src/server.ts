@@ -86,30 +86,53 @@ app.use((err: any, req: express.Request, res: express.Response, next: express.Ne
   res.status(500).json({ error: 'Internal server error occurred.' });
 });
 
-// Start Server
-const server = app.listen(PORT, () => {
-  console.log(`=============================================`);
-  console.log(` OrBit API Server running on port ${PORT}`);
-  console.log(` Client Origin: ${process.env.CLIENT_URL || 'http://localhost:3000'}`);
-  console.log(` SQLite Database: Active`);
-  console.log(`=============================================`);
-});
-
-// Graceful shutdown on SIGTERM/SIGINT (Render sends SIGTERM on restart)
-async function shutdown(signal: string) {
-  console.log(`\n[${signal}] Shutting down gracefully...`);
-  server.close(async () => {
-    console.log('[Server] HTTP server closed.');
-    await prisma.$disconnect();
-    console.log('[Server] Database connection closed.');
-    process.exit(0);
-  });
-  // Force exit after 10s if graceful shutdown hangs
-  setTimeout(() => {
-    console.error('[Server] Forced shutdown after timeout.');
-    process.exit(1);
-  }, 10000).unref();
+// Ensure avatarUrl column exists (raw SQL fallback for databases missing the column)
+async function ensureSchema() {
+  try {
+    const result = await prisma.$queryRawUnsafe<{ name: string }[]>(
+      "PRAGMA table_info('User')"
+    );
+    const hasAvatarUrl = result.some((col) => col.name === 'avatarUrl');
+    if (!hasAvatarUrl) {
+      await prisma.$executeRawUnsafe('ALTER TABLE "User" ADD COLUMN "avatarUrl" TEXT');
+      console.log('[Schema] Added missing avatarUrl column to User table.');
+    } else {
+      console.log('[Schema] avatarUrl column already exists.');
+    }
+  } catch (err: any) {
+    console.error('[Schema] Failed to ensure avatarUrl column:', err.message);
+  }
 }
 
-process.on('SIGTERM', () => shutdown('SIGTERM'));
-process.on('SIGINT', () => shutdown('SIGINT'));
+// Start Server
+ensureSchema().then(() => {
+  const server = app.listen(PORT, () => {
+    console.log(`=============================================`);
+    console.log(` OrBit API Server running on port ${PORT}`);
+    console.log(` Client Origin: ${process.env.CLIENT_URL || 'http://localhost:3000'}`);
+    console.log(` SQLite Database: Active`);
+    console.log(`=============================================`);
+  });
+
+  // Graceful shutdown on SIGTERM/SIGINT (Render sends SIGTERM on restart)
+  async function shutdown(signal: string) {
+    console.log(`\n[${signal}] Shutting down gracefully...`);
+    server.close(async () => {
+      console.log('[Server] HTTP server closed.');
+      await prisma.$disconnect();
+      console.log('[Server] Database connection closed.');
+      process.exit(0);
+    });
+    // Force exit after 10s if graceful shutdown hangs
+    setTimeout(() => {
+      console.error('[Server] Forced shutdown after timeout.');
+      process.exit(1);
+    }, 10000).unref();
+  }
+
+  process.on('SIGTERM', () => shutdown('SIGTERM'));
+  process.on('SIGINT', () => shutdown('SIGINT'));
+}).catch((err) => {
+  console.error('[FATAL] Failed to ensure schema on startup:', err);
+  process.exit(1);
+});

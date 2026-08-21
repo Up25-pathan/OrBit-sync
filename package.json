@@ -6,10 +6,10 @@
   "scripts": {
     "dev": "ts-node-dev --respawn --transpile-only src/server.ts",
     "build": "tsc",
-    "start": "prisma db push --accept-data-loss && node dist/server.js",
+    "start": "node dist/server.js",
     "prisma:migrate": "prisma migrate dev --name init",
     "prisma:generate": "prisma generate",
-    "postinstall": "prisma db push --accept-data-loss && prisma generate",
+    "postinstall": "prisma generate",
     "keep-alive": "node keep-alive.js"
   },
   "dependencies": {
