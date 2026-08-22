@@ -364,43 +364,21 @@ router.put('/users/:id/tier', async (req: Request, res: Response) => {
   }
 });
 
-// POST /api/v1/admin/users/:id/license/rotate (Admin Rotate License Key)
-router.post('/users/:id/license/rotate', async (req: Request, res: Response) => {
-  try {
-    const { id } = req.params;
-
-    const user = await prisma.user.findUnique({
-      where: { id },
-      include: { subscription: true },
-    });
-
-    if (!user) {
-      return res.status(404).json({ error: 'User not found.' });
-    }
-
-    const tier = normalizeTier(user.subscription?.planTier || 'free');
-    const newLicenseKey = generateLicenseKey(tier);
-
-    const license = await prisma.license.upsert({
-      where: { userId: id },
-      update: { licenseKey: newLicenseKey },
-      create: { userId: id, licenseKey: newLicenseKey, maxDevices: tier === 'pro' ? 10 : 3 },
-    });
-
-    return res.status(200).json({ success: true, licenseKey: license.licenseKey });
-  } catch (err: any) {
-    return res.status(500).json({ error: 'Failed to rotate license key.' });
-  }
-});
-
-// DELETE /api/v1/admin/users/:id (Delete User Account)
+// DELETE /api/v1/admin/users/:id (Delete User Account and all existence)
 router.delete('/users/:id', async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
-
-    await prisma.user.delete({ where: { id } });
-    return res.status(200).json({ success: true, message: 'User account deleted successfully.' });
+    const user = await prisma.user.findUnique({ where: { id } });
+    if (!user) {
+      return res.status(404).json({ error: 'User not found.' });
+    }
+    await prisma.$transaction([
+      prisma.supportTicket.deleteMany({ where: { email: user.email } }),
+      prisma.user.delete({ where: { id } }),
+    ]);
+    return res.status(200).json({ success: true, message: 'User account and all associated data deleted successfully.' });
   } catch (err: any) {
+    console.error('Delete user error:', err);
     return res.status(500).json({ error: 'Failed to delete user account.' });
   }
 });

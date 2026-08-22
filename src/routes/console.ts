@@ -2,7 +2,7 @@ import { Response } from 'express';
 import crypto from 'crypto';
 import { prisma } from '../db';
 import { AuthRequest, authenticateJWT, hashPassword } from '../auth';
-import { generateLicenseKey } from '../utils/licenseGenerator';
+import { generateLicenseKey, parseLicenseKey, normalizeTier } from '../utils/licenseGenerator';
 
 const express = require('express');
 const router = express.Router();
@@ -44,6 +44,26 @@ router.get('/dashboard', authenticateJWT, async (req: AuthRequest, res: Response
         },
         include: { devices: true },
       });
+    } else {
+      // Auto-sync existing license key to the current subscription tier if there is a mismatch!
+      const subscriptionTier = user.subscription?.planTier || 'free';
+      const parsed = parseLicenseKey(userLicense.licenseKey);
+      const normalizedSubTier = normalizeTier(subscriptionTier);
+
+      if (parsed.planTier !== normalizedSubTier) {
+        const newLicenseKey = generateLicenseKey(subscriptionTier);
+        const maxDevices = subscriptionTier === 'enterprise' ? 9999 : (subscriptionTier === 'pro' ? 10 : 3);
+
+        userLicense = await prisma.license.update({
+          where: { id: userLicense.id },
+          data: {
+            licenseKey: newLicenseKey,
+            maxDevices,
+          },
+          include: { devices: true },
+        });
+        console.log(`[License Sync] Automatically upgraded license key for user: ${user.email} from ${parsed.planTier.toUpperCase()} to ${normalizedSubTier.toUpperCase()}`);
+      }
     }
 
     return res.status(200).json({
@@ -129,12 +149,6 @@ router.post('/profile/update', authenticateJWT, async (req: AuthRequest, res: Re
   }
 });
 
-// POST /api/console/license/rotate (Disabled for user self-service security)
-router.post('/license/rotate', authenticateJWT, async (req: AuthRequest, res: Response) => {
-  return res.status(403).json({
-    error: 'Self-service key rotation is disabled for system security during Beta. Contact an administrator for key re-issuance.',
-  });
-});
 
 // POST /api/console/devices/revoke
 router.post('/devices/revoke', authenticateJWT, async (req: AuthRequest, res: Response) => {

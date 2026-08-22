@@ -4,9 +4,35 @@ import Stripe from 'stripe';
 import crypto from 'crypto';
 import { prisma } from '../db';
 import { AuthRequest, authenticateJWT } from '../auth';
+import { generateLicenseKey } from '../utils/licenseGenerator';
 
 const express = require('express');
 const router = express.Router();
+
+// Helper to update/regenerate user license key on subscription upgrade
+async function updateUserLicense(userId: string, planTier: string) {
+  try {
+    const normalizedTier = planTier === 'mesh' ? 'pro' : planTier;
+    const maxDevices = planTier === 'mesh' ? 9999 : (planTier === 'pro' ? 10 : 3);
+    const newLicenseKey = generateLicenseKey(normalizedTier);
+
+    await prisma.license.upsert({
+      where: { userId },
+      update: {
+        licenseKey: newLicenseKey,
+        maxDevices,
+      },
+      create: {
+        userId,
+        licenseKey: newLicenseKey,
+        maxDevices,
+      },
+    });
+    console.log(`[License Upgrade] Successfully generated ${normalizedTier.toUpperCase()} key for userId: ${userId}`);
+  } catch (err) {
+    console.error('[License Upgrade Error]:', err);
+  }
+}
 
 // 1. GATEWAY INITIALIZATIONS
 
@@ -34,6 +60,7 @@ router.post('/razorpay/order', authenticateJWT, async (req: AuthRequest, res: Re
   try {
     const userId = req.user?.id;
     const { planTier } = req.body;
+    console.log('[Razorpay Order] Request from userId:', userId, 'for plan:', planTier);
 
     if (!userId) {
       return res.status(401).json({ error: 'Unauthorized.' });
@@ -70,7 +97,7 @@ router.post('/razorpay/order', authenticateJWT, async (req: AuthRequest, res: Re
     const order = await razorpay.orders.create({
       amount: amountInPaisa,
       currency,
-      receipt: `receipt_user_${userId}_${Date.now()}`,
+      receipt: `rcpt_${userId.substring(0, 8)}_${Date.now()}`,
       notes: { userId, planTier },
     });
 
@@ -117,6 +144,8 @@ router.post('/razorpay/verify', authenticateJWT, async (req: AuthRequest, res: R
         create: { userId, planTier, status: 'active', expiresAt },
       });
 
+      await updateUserLicense(userId, planTier);
+
       return res.status(200).json({ status: 'SUCCESS' });
     }
 
@@ -152,6 +181,8 @@ router.post('/razorpay/verify', authenticateJWT, async (req: AuthRequest, res: R
         expiresAt,
       },
     });
+
+    await updateUserLicense(userId, planTier);
 
     return res.status(200).json({ status: 'SUCCESS' });
 
@@ -245,6 +276,8 @@ router.post('/stripe/verify-sandbox', authenticateJWT, async (req: AuthRequest, 
       create: { planTier, status: 'active', expiresAt, userId },
     });
 
+    await updateUserLicense(userId, planTier);
+
     return res.status(200).json({ status: 'SUCCESS' });
   } catch (error: any) {
     console.error('Stripe verify sandbox error:', error);
@@ -318,6 +351,8 @@ router.post('/paypal/capture', authenticateJWT, async (req: AuthRequest, res: Re
         expiresAt,
       },
     });
+
+    await updateUserLicense(userId, planTier);
 
     return res.status(200).json({
       status: 'SUCCESS',
