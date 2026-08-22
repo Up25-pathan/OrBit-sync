@@ -51,12 +51,12 @@ app.use(cors({
 }));
 
 // Route Stripe Webhook directly to parse raw request buffers (Stripe SDK signature checks require this)
-// For all other routes, parse JSON bodies
+// For all other routes, parse JSON bodies (supporting larger payloads like base64 avatars)
 app.use((req, res, next) => {
   if (req.originalUrl === '/api/webhooks/stripe') {
     next();
   } else {
-    express.json()(req, res, next);
+    express.json({ limit: '10mb' })(req, res, next);
   }
 });
 
