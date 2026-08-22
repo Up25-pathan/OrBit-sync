@@ -191,12 +191,42 @@ function ConsoleContent() {
             setLicenseKey(fallbackKey);
           }
           setDevices(data.devices || []);
+          let fetchedName = '';
           if (data.user?.displayName) {
-            setDisplayName(data.user.displayName);
+            fetchedName = data.user.displayName;
           } else if (data.user?.email) {
-            setDisplayName(data.user.email.split('@')[0]);
+            fetchedName = data.user.email.split('@')[0];
           }
-          if (data.user?.avatarUrl) setAvatarUrl(data.user.avatarUrl);
+          if (fetchedName) setDisplayName(fetchedName);
+
+          let fetchedAvatar = '';
+          if (data.user?.avatarUrl) {
+            fetchedAvatar = data.user.avatarUrl;
+            setAvatarUrl(fetchedAvatar);
+          }
+
+          // Sync fetched user profile parameters to localStorage cache
+          const userStr = localStorage.getItem('orbit_user');
+          if (userStr) {
+            try {
+              const u = JSON.parse(userStr);
+              let changed = false;
+              if (fetchedName && u.displayName !== fetchedName) {
+                u.displayName = fetchedName;
+                changed = true;
+              }
+              if (fetchedAvatar && u.avatarUrl !== fetchedAvatar) {
+                u.avatarUrl = fetchedAvatar;
+                changed = true;
+              }
+              if (changed) {
+                localStorage.setItem('orbit_user', JSON.stringify(u));
+                window.dispatchEvent(new Event('storage'));
+              }
+            } catch (err) {
+              console.error('Error syncing fetched user data to localStorage:', err);
+            }
+          }
           const tier = data.subscription?.planTier || 'solo';
           if (tier === 'mesh' || tier === 'pro') {
             setPlanTier('Developer Tier');
@@ -259,6 +289,9 @@ function ConsoleContent() {
           setDisplayName(parsed.displayName);
         } else if (parsed.email) {
           setDisplayName(parsed.email.split('@')[0]);
+        }
+        if (parsed.avatarUrl) {
+          setAvatarUrl(parsed.avatarUrl);
         }
 
         // Fetch database parameters
