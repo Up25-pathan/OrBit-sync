@@ -78,7 +78,7 @@ function ConsoleContent() {
   const [showPairModal, setShowPairModal] = useState(false);
 
   // Pairing Wizard States
-  const [wizardStep, setWizardStep] = useState<1 | 2 | 3>(1);
+  const [wizardStep, setWizardStep] = useState<1 | 2 | 3>(2);
   const [newDeviceName, setNewDeviceName] = useState('');
   const [newDevicePlatform, setNewDevicePlatform] = useState<'windows' | 'macos' | 'linux'>('macos');
   const [pairingProgress, setPairingProgress] = useState(0);
@@ -219,6 +219,14 @@ function ConsoleContent() {
                 u.avatarUrl = fetchedAvatar;
                 changed = true;
               }
+              if (fetchedKey && u.licenseKey !== fetchedKey) {
+                u.licenseKey = fetchedKey;
+                changed = true;
+              }
+              if (data.subscription?.planTier && u.planTier !== data.subscription.planTier) {
+                u.planTier = data.subscription.planTier;
+                changed = true;
+              }
               if (changed) {
                 localStorage.setItem('orbit_user', JSON.stringify(u));
                 window.dispatchEvent(new Event('storage'));
@@ -301,6 +309,7 @@ function ConsoleContent() {
         const checkoutSuccess = searchParams.get('checkout_success');
         if (checkoutSuccess === 'true') {
           alert('Subscription upgrade successful!');
+          router.replace('/console');
         }
       } catch (e) {
         router.push('/login');
@@ -317,31 +326,6 @@ function ConsoleContent() {
   };
 
 
-
-  const handleRotateKey = async () => {
-    const userString = localStorage.getItem('orbit_user');
-    if (!userString) return;
-    try {
-      const parsed = JSON.parse(userString);
-      const token = parsed.token;
-
-      const res = await fetch(`${API_BASE_URL}/api/console/license/rotate`, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
-      });
-      const data = await res.json();
-      if (res.ok) {
-        setLicenseKey(data.licenseKey);
-        alert('License verification key successfully rotated!');
-      } else {
-        alert(data.error || 'Failed to rotate key.');
-      }
-    } catch (err) {
-      console.error('Error rotating key:', err);
-    }
-  };
 
 
 
@@ -407,7 +391,7 @@ function ConsoleContent() {
             await fetchDashboardData();
             setShowPairModal(false);
             setNewDeviceName('');
-            setWizardStep(1);
+            setWizardStep(2);
           } else {
             alert(data.message || 'Verification handshake failed.');
             setWizardStep(2);
@@ -836,7 +820,7 @@ function ConsoleContent() {
                       </div>
                       <button
                         onClick={() => {
-                          setWizardStep(1);
+                          setWizardStep(2);
                           setShowPairModal(true);
                         }}
                         className="glow-btn"
@@ -1391,29 +1375,13 @@ function ConsoleContent() {
 
               {/* Header */}
               <div style={{ marginBottom: '25px' }}>
-                <span style={{ fontSize: '0.7rem', fontWeight: 700, color: 'var(--accent-red)', letterSpacing: '1px' }}>Step {wizardStep} of 3</span>
+                <span style={{ fontSize: '0.7rem', fontWeight: 700, color: 'var(--accent-red)', letterSpacing: '1px' }}>Step {wizardStep - 1} of 2</span>
                 <h3 style={{ fontSize: '1.4rem', color: '#fff', fontWeight: 800, margin: '5px 0 0 0', fontFamily: 'var(--font-orbitron)' }}>Pair Synchronization Node</h3>
               </div>
 
               {/* Wizard Steps */}
 
-              {/* Step 1: Copy Command */}
-              {wizardStep === 1 && (
-                <div>
-                  <p style={{ color: '#808085', fontSize: '0.85rem', lineHeight: 1.5, marginBottom: '20px' }}>
-                    Run the following curl command in your device's terminal folder to download the watch daemon.
-                  </p>
-                  <div style={{ background: '#030202', border: '1px solid rgba(255,255,255,0.06)', borderRadius: '6px', padding: '12px', fontSize: '0.75rem', fontFamily: 'monospace', color: '#ff859f', display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '25px' }}>
-                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '85%' }}>curl -s https://orbit.dev/install.sh | sh</span>
-                    <button onClick={() => navigator.clipboard.writeText('curl -s https://orbit.dev/install.sh | sh')} style={{ background: 'transparent', border: 'none', color: '#a0a0a5', cursor: 'pointer', fontSize: '0.75rem' }}>Copy</button>
-                  </div>
-                  <button onClick={() => setWizardStep(2)} className="glow-btn" style={{ width: '100%', background: 'var(--accent-red)', border: 'none', color: '#fff', padding: '12px', borderRadius: '6px', fontSize: '0.85rem', fontWeight: 700, cursor: 'pointer', fontFamily: 'var(--font-orbitron)' }}>
-                    I Installed Daemon, Next
-                  </button>
-                </div>
-              )}
-
-              {/* Step 2: Configure device */}
+              {/* Step 1: Configure device */}
               {wizardStep === 2 && (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
@@ -1440,14 +1408,13 @@ function ConsoleContent() {
                     </select>
                   </div>
 
-                  <div style={{ display: 'flex', gap: '15px', marginTop: '10px' }}>
-                    <button onClick={() => setWizardStep(1)} style={{ flex: 1, background: 'transparent', border: '1px solid rgba(255,255,255,0.1)', color: '#a0a0a5', padding: '12px', borderRadius: '6px', fontSize: '0.85rem', cursor: 'pointer' }}>Back</button>
-                    <button onClick={handleStartPairing} className="glow-btn" style={{ flex: 1, background: 'var(--accent-red)', border: 'none', color: '#fff', padding: '12px', borderRadius: '6px', fontSize: '0.85rem', fontWeight: 700, cursor: 'pointer', fontFamily: 'var(--font-orbitron)' }}>Pair Node</button>
+                  <div style={{ display: 'flex', marginTop: '10px' }}>
+                    <button onClick={handleStartPairing} className="glow-btn" style={{ width: '100%', background: 'var(--accent-red)', border: 'none', color: '#fff', padding: '12px', borderRadius: '6px', fontSize: '0.85rem', fontWeight: 700, cursor: 'pointer', fontFamily: 'var(--font-orbitron)' }}>Pair Node</button>
                   </div>
                 </div>
               )}
 
-              {/* Step 3: Simulation */}
+              {/* Step 2: Simulation */}
               {wizardStep === 3 && (
                 <div style={{ textAlign: 'center', padding: '20px 0' }}>
                   <div style={{ width: '40px', height: '40px', border: '3px solid rgba(255,0,60,0.15)', borderTopColor: 'var(--accent-red)', borderRadius: '50%', animation: 'spin-slow 1s linear infinite', margin: '0 auto 20px auto' }} />

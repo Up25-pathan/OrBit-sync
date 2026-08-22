@@ -155,13 +155,13 @@ export default function DownloadPage() {
               background: detectedOs === 'mac'
                 ? 'linear-gradient(145deg, rgba(20, 15, 25, 0.9), rgba(8, 6, 14, 0.95))'
                 : 'linear-gradient(145deg, rgba(12, 10, 14, 0.8), rgba(6, 5, 8, 0.9))',
-              border: detectedOs === 'mac' ? '1.5px solid #a259ff' : '1px solid rgba(255, 255, 255, 0.1)',
+              border: detectedOs === 'mac' ? '1.5px solid rgba(162, 89, 255, 0.4)' : '1px solid rgba(255, 255, 255, 0.08)',
               borderRadius: '20px',
               padding: '32px 28px',
               display: 'flex',
               flexDirection: 'column',
               justifyContent: 'space-between',
-              boxShadow: detectedOs === 'mac' ? '0 15px 40px rgba(162, 89, 255, 0.2)' : '0 15px 35px rgba(0,0,0,0.5)',
+              boxShadow: detectedOs === 'mac' ? '0 15px 40px rgba(162, 89, 255, 0.15)' : '0 15px 35px rgba(0,0,0,0.5)',
               position: 'relative',
             }}
           >
@@ -173,7 +173,7 @@ export default function DownloadPage() {
                   </div>
                   <div>
                     <h3 style={{ fontSize: '1.4rem', fontWeight: 800, color: '#fff', margin: 0, fontFamily: 'var(--font-orbitron)' }}>macOS</h3>
-                    <span style={{ fontSize: '0.75rem', color: '#a259ff', fontWeight: 700 }}>Universal Binary</span>
+                    <span style={{ fontSize: '0.75rem', color: '#a259ff', fontWeight: 700 }}>Coming Soon</span>
                   </div>
                 </div>
                 {detectedOs === 'mac' && (
@@ -187,46 +187,30 @@ export default function DownloadPage() {
                 Native Metal & Cocoa rendering stack optimized for M1, M2, M3, M4 Apple Silicon and Intel Macs.
               </p>
 
-              <div style={{ background: 'rgba(0,0,0,0.3)', border: '1px solid rgba(255,255,255,0.05)', borderRadius: '10px', padding: '14px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <span style={{ fontSize: '0.8rem', color: '#fff', fontWeight: 700 }}>Apple Silicon (M-Series ARM64)</span>
-                  <button
-                    onClick={() => handleDownload(release?.urls.macArmUrl, 'macOS Apple Silicon ARM64')}
-                    style={{ background: 'rgba(162, 89, 255, 0.15)', border: '1px solid rgba(162, 89, 255, 0.35)', color: '#fff', padding: '6px 14px', borderRadius: '6px', fontSize: '0.78rem', fontWeight: 700, cursor: 'pointer' }}
-                  >
-                    Download ARM64
-                  </button>
-                </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderTop: '1px solid rgba(255,255,255,0.04)', paddingTop: '10px' }}>
-                  <span style={{ fontSize: '0.8rem', color: '#a0a0a5' }}>macOS Intel (x86_64)</span>
-                  <button
-                    onClick={() => handleDownload(release?.urls.macX64Url, 'macOS Intel x64')}
-                    style={{ background: 'rgba(255, 255, 255, 0.05)', border: '1px solid rgba(255, 255, 255, 0.1)', color: '#fff', padding: '6px 14px', borderRadius: '6px', fontSize: '0.78rem', fontWeight: 700, cursor: 'pointer' }}
-                  >
-                    Download x64
-                  </button>
-                </div>
+              <div style={{ background: 'rgba(0,0,0,0.3)', border: '1px solid rgba(255,255,255,0.05)', borderRadius: '10px', padding: '24px 16px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '8px', textAlign: 'center' }}>
+                <span style={{ fontSize: '1.5rem' }}>⏳</span>
+                <span style={{ fontSize: '0.9rem', color: '#fff', fontWeight: 700 }}>Universal macOS Release</span>
+                <span style={{ fontSize: '0.78rem', color: '#808085' }}>Native Apple Silicon (ARM64) and Intel (x64) desktop builds are coming soon.</span>
               </div>
             </div>
 
             <div style={{ transform: 'translateZ(30px)', width: '100%', marginTop: '24px' }}>
               <button
-                onClick={() => handleDownload(release?.urls.macArmUrl || release?.urls.macX64Url, 'macOS')}
+                disabled
                 style={{
                   width: '100%',
-                  background: 'linear-gradient(135deg, #a259ff 0%, #7928ca 100%)',
-                  border: 'none',
-                  color: '#fff',
+                  background: 'rgba(255, 255, 255, 0.02)',
+                  border: '1.5px solid rgba(162, 89, 255, 0.25)',
+                  color: '#808085',
                   borderRadius: '10px',
                   padding: '14px',
                   fontSize: '0.95rem',
                   fontWeight: 800,
-                  cursor: 'pointer',
+                  cursor: 'not-allowed',
                   fontFamily: 'var(--font-orbitron)',
-                  boxShadow: '0 0 20px rgba(162, 89, 255, 0.4)',
                 }}
               >
-                Download for macOS
+                Coming Soon
               </button>
             </div>
           </TiltCard>

@@ -553,22 +553,25 @@ function AdminContent() {
     }
   };
 
-  const handleRotateUserKey = async (userId: string) => {
+  const handleDeleteUser = async (userId: string, email: string) => {
+    if (!confirm(`Are you absolutely sure you want to delete user ${email}? This will completely wipe all database records, licenses, paired devices, support tickets, and subscription logs associated with this account.`)) {
+      return;
+    }
     const token = getAuthToken();
     try {
-      const res = await fetch(`${API_BASE_URL}/api/v1/admin/users/${userId}/license/rotate`, {
-        method: 'POST',
+      const res = await fetch(`${API_BASE_URL}/api/v1/admin/users/${userId}`, {
+        method: 'DELETE',
         headers: { Authorization: `Bearer ${token}` },
       });
       const d = await res.json();
       if (res.ok) {
-        alert(`License key rotated! New key: ${d.licenseKey}`);
+        alert('User account and all associated data completely deleted.');
         fetchAdminData();
       } else {
-        alert(d.error || 'Failed to rotate key.');
+        alert(d.error || 'Failed to delete user.');
       }
     } catch (e) {
-      alert('Key rotation request failed.');
+      alert('Delete user request failed.');
     }
   };
 
@@ -844,7 +847,7 @@ function AdminContent() {
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '25px', flexWrap: 'wrap', gap: '15px' }}>
                     <div>
                       <h3 style={{ fontSize: '1.25rem', color: '#fff', fontWeight: 'bold', fontFamily: 'var(--font-orbitron)' }}>Developer User Directory</h3>
-                      <p style={{ color: '#808085', fontSize: '0.85rem', margin: '4px 0 0 0' }}>Manage roles, override plan tiers, and rotate verification keys.</p>
+                      <p style={{ color: '#808085', fontSize: '0.85rem', margin: '4px 0 0 0' }}>Manage roles, override plan tiers, and delete user profiles.</p>
                     </div>
 
                     <input
@@ -926,10 +929,10 @@ function AdminContent() {
                                   Override Tier
                                 </button>
                                 <button
-                                  onClick={() => handleRotateUserKey(u.id)}
-                                  style={{ background: 'transparent', border: '1px solid rgba(255,255,255,0.1)', color: '#a0a0a5', padding: '6px 12px', borderRadius: '4px', cursor: 'pointer', fontSize: '0.75rem' }}
+                                  onClick={() => handleDeleteUser(u.id, u.email)}
+                                  style={{ background: 'rgba(255, 76, 117, 0.08)', border: '1px solid rgba(255, 76, 117, 0.3)', color: '#ff4c75', padding: '6px 12px', borderRadius: '4px', cursor: 'pointer', fontSize: '0.75rem' }}
                                 >
-                                  Rotate Key
+                                  Delete User
                                 </button>
                               </div>
                             </td>
@@ -954,9 +957,6 @@ function AdminContent() {
                             Owner: <span style={{ color: '#fff' }}>{l.userEmail}</span> | Tier: <span style={{ color: 'var(--accent-red)', textTransform: 'uppercase' }}>{l.planTier}</span> | Active Nodes: <span style={{ color: '#fff' }}>{l.activeDevicesCount} / {l.maxDevices}</span>
                           </div>
                         </div>
-                        <button onClick={() => handleRotateUserKey(l.userId)} style={{ background: 'rgba(255,0,60,0.08)', border: '1px solid rgba(255,0,60,0.25)', color: '#fff', padding: '6px 14px', borderRadius: '4px', fontSize: '0.75rem', cursor: 'pointer' }}>
-                          Re-issue Signature
-                        </button>
                       </div>
                     ))}
                   </div>
