@@ -135,14 +135,14 @@ router.post('/bootstrap', async (req: Request, res: Response) => {
     const { email, bootstrapKey: incomingBootstrapKey } = req.body;
     const adminBootstrapKey = process.env.ADMIN_BOOTSTRAP_KEY;
     if (!adminBootstrapKey) {
-      console.error('=============================================');
-      console.error('  CRITICAL: ADMIN_BOOTSTRAP_KEY env var not set!');
-      console.error('  Set a strong random value in production.');
-      console.error('=============================================');
+      if (process.env.NODE_ENV === 'production') {
+        return res.status(403).json({ error: 'Administrative bootstrapping is disabled in production because ADMIN_BOOTSTRAP_KEY is not defined.' });
+      }
+      console.warn('[Security Warning] ADMIN_BOOTSTRAP_KEY is not set. Falling back to dev default key.');
     }
     const expectedKey = adminBootstrapKey || 'dev-only-insecure-bootstrap-key';
 
-    if (incomingBootstrapKey !== expectedKey) {
+    if (!incomingBootstrapKey || incomingBootstrapKey !== expectedKey) {
       return res.status(401).json({ error: 'Invalid admin bootstrap secret key.' });
     }
 
