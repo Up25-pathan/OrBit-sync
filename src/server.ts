@@ -24,31 +24,61 @@ app.use(helmet({
   crossOriginOpenerPolicy: false,
 }));
 
-const allowedOrigins = [
+// Parse any additional comma-separated origins from environment variables
+const envOrigins = [
   process.env.CLIENT_URL,
   process.env.FRONTEND_URL,
+  ...(process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(',').map((o) => o.trim()) : []),
+].filter(Boolean) as string[];
+
+const allowedOrigins = [
+  ...envOrigins,
   'http://localhost:3000',
+  'http://localhost:5173',
   'http://localhost:9090',
   'https://orbit-sync.onrender.com',
   'https://orbitcollab-three.vercel.app',
   'https://orbit-server-ymao.onrender.com',
   'tauri://localhost',
   'https://tauri.localhost',
-].filter(Boolean) as string[];
+];
+
+// Helper to check if an origin is permitted
+function isOriginAllowed(origin: string): boolean {
+  if (allowedOrigins.includes(origin)) return true;
+  if (origin.startsWith('http://localhost:') || origin.startsWith('http://127.0.0.1:')) return true;
+
+  try {
+    const url = new URL(origin);
+    // Allow all Vercel deployments (previews, production, branches)
+    if (url.hostname.endsWith('.vercel.app')) return true;
+    // Allow all Render services within the ecosystem
+    if (url.hostname.endsWith('.onrender.com')) return true;
+  } catch {
+    // Malformed origin string
+    return false;
+  }
+
+  return false;
+}
 
 // Enable CORS for client connections & Control Server verifications
 app.use(cors({
   origin: (origin, callback) => {
-    if (!origin || allowedOrigins.includes(origin) || origin.startsWith('http://localhost:')) {
+    // Allow requests with no origin (e.g. mobile apps, curl, server-to-server, desktop apps)
+    if (!origin || isOriginAllowed(origin)) {
       callback(null, true);
     } else {
-      callback(new Error('Cross-Origin Access Denied by OrBit Security Policy'));
+      console.warn(`[CORS Blocked] Origin not allowed: ${origin}`);
+      // Passing `null, false` cleanly denies CORS to browser without triggering unhandled 500 error in Express
+      callback(null, false);
     }
   },
   credentials: true,
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Control-Server-Secret'],
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
 }));
+app.options('*', cors());
 
 // Route Stripe Webhook directly to parse raw request buffers (Stripe SDK signature checks require this)
 // For all other routes, parse JSON bodies (supporting larger payloads like base64 avatars)

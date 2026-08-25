@@ -82,16 +82,7 @@ router.post('/razorpay/order', authenticateJWT, async (req: AuthRequest, res: Re
     }
 
     if (!razorpay) {
-      console.log(`[Razorpay Sandbox] mock order for: ${user.email}, Plan: ${planTier}`);
-      const mockOrderId = `order_mock_${crypto.randomBytes(8).toString('hex')}`;
-      return res.status(200).json({
-        isSandbox: true,
-        keyId: 'rzp_test_mock_keys_2026',
-        orderId: mockOrderId,
-        amount: amountInPaisa,
-        currency,
-        userEmail: user.email,
-      });
+      return res.status(500).json({ error: 'Razorpay payment gateway is not configured on the server. Please set RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET.' });
     }
 
     const order = await razorpay.orders.create({
@@ -124,29 +115,11 @@ router.post('/razorpay/verify', authenticateJWT, async (req: AuthRequest, res: R
       razorpay_payment_id, 
       razorpay_order_id, 
       razorpay_signature, 
-      planTier,
-      isSandbox 
+      planTier
     } = req.body;
 
     if (!userId) {
       return res.status(401).json({ error: 'Unauthorized.' });
-    }
-
-    // Sandbox check
-    if (isSandbox || !razorpay) {
-      console.log(`[Razorpay Sandbox] verified payment for ${userId} -> Plan: ${planTier}`);
-      const expiresAt = new Date();
-      expiresAt.setMonth(expiresAt.getMonth() + 1);
-
-      await prisma.subscription.upsert({
-        where: { userId },
-        update: { planTier, status: 'active', expiresAt },
-        create: { userId, planTier, status: 'active', expiresAt },
-      });
-
-      await updateUserLicense(userId, planTier);
-
-      return res.status(200).json({ status: 'SUCCESS' });
     }
 
     // Cryptographic signature check
