@@ -15,6 +15,7 @@ model User {
   passwordHash        String
   role                String        @default("USER") // "USER", "ADMIN"
   isVerified          Boolean       @default(false)
+  twoFactorEnabled    Boolean       @default(false)
   verificationCode    String?
   verificationExpires DateTime?
   createdAt           DateTime      @default(now())

@@ -72,6 +72,7 @@ router.get('/dashboard', authenticateJWT, async (req: AuthRequest, res: Response
         displayName: user.displayName,
         avatarUrl: user.avatarUrl || null,
         role: user.role,
+        twoFactorEnabled: user.twoFactorEnabled || false,
       },
       license: {
         licenseKey: userLicense.licenseKey,
@@ -278,6 +279,35 @@ router.post('/password/verify-and-update', authenticateJWT, async (req: AuthRequ
   }
 });
 
+// POST /api/console/2fa/toggle
+router.post('/2fa/toggle', authenticateJWT, async (req: AuthRequest, res: Response) => {
+  try {
+    const userId = req.user?.id;
+    const { enabled } = req.body;
+
+    if (!userId) {
+      return res.status(401).json({ error: 'Unauthorized.' });
+    }
+
+    const updated = await prisma.user.update({
+      where: { id: userId },
+      data: {
+        twoFactorEnabled: Boolean(enabled),
+      },
+    });
+
+    return res.status(200).json({
+      success: true,
+      twoFactorEnabled: updated.twoFactorEnabled,
+      message: updated.twoFactorEnabled 
+        ? 'Two-Factor Authentication (Email OTP) enabled successfully.' 
+        : 'Two-Factor Authentication disabled.',
+    });
+  } catch (err: any) {
+    console.error('2FA toggle error:', err);
+    return res.status(500).json({ error: 'Failed to update 2FA settings.' });
+  }
+});
 
 // POST /api/console/devices/revoke
 router.post('/devices/revoke', authenticateJWT, async (req: AuthRequest, res: Response) => {

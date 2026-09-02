@@ -83,7 +83,7 @@ async function provisionUserDefaultResources(tx: any, userId: string) {
   });
 }
 
-import { sendVerificationEmail } from '../utils/mailer';
+import { sendVerificationEmail, sendTwoFactorOtpEmail } from '../utils/mailer';
 
 // ----------------------------------------------------
 // SECTION A: EMAIL & PASSWORD REGISTRATION WITH OTP
@@ -99,38 +99,36 @@ router.post('/signup', rateLimit(5, 60000), async (req: Request, res: Response) 
     }
 
     const cleanEmail = email.trim().toLowerCase();
+    const cleanPass = password.trim();
 
-    if (password.length < 6) {
+    if (cleanPass.length < 6) {
       return res.status(400).json({ error: 'Password must be at least 6 characters long.' });
     }
 
-    // Check if user already exists
     const existingUser = await prisma.user.findUnique({
       where: { email: cleanEmail },
     });
 
-    // Generate cryptographic 6-digit OTP
-    const code = crypto.randomInt(100000, 1000000).toString();
-    const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 mins expiry
-    const passwordHash = hashPassword(password);
-
+    // Handle existing registered users
     if (existingUser) {
       if (existingUser.isVerified) {
         return res.status(409).json({ error: 'An account with this email already exists. Please log in.' });
       }
 
-      // If user exists but is unverified, refresh their password & verification code and resend
+      // If user exists but is not verified, refresh verification code and resend
+      const code = crypto.randomInt(100000, 1000000).toString();
+      const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
+
       await prisma.user.update({
         where: { id: existingUser.id },
         data: {
-          passwordHash,
-          displayName: displayName || cleanEmail.split('@')[0],
           verificationCode: code,
           verificationExpires: expiresAt,
+          passwordHash: hashPassword(cleanPass),
+          displayName: displayName ? displayName.trim() : existingUser.displayName,
         },
       });
 
-      // Dispatch email via Resend
       sendVerificationEmail(cleanEmail, code).catch((err) => {
         console.error('[Background Resend Dispatch Error]:', err);
       });
@@ -138,23 +136,27 @@ router.post('/signup', rateLimit(5, 60000), async (req: Request, res: Response) 
       return res.status(200).json({
         status: 'PENDING_VERIFICATION',
         email: cleanEmail,
-        message: 'A fresh 6-digit verification code has been dispatched.',
+        message: 'Account pending verification. A new 6-digit code has been sent to your email.',
       });
     }
 
-    // Save new unverified user profile
+    // Generate cryptographic 6-digit code (100000 - 999999)
+    const code = crypto.randomInt(100000, 1000000).toString();
+    const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes validity
+
+    // Create unverified user
     await prisma.user.create({
       data: {
         email: cleanEmail,
-        displayName: displayName || cleanEmail.split('@')[0],
-        passwordHash,
+        passwordHash: hashPassword(cleanPass),
+        displayName: displayName ? displayName.trim() : cleanEmail.split('@')[0],
         isVerified: false,
         verificationCode: code,
         verificationExpires: expiresAt,
       },
     });
 
-    // Dispatch email via Resend
+    // Dispatch Verification Code via Resend
     sendVerificationEmail(cleanEmail, code).catch((err) => {
       console.error('[Background Resend Dispatch Error]:', err);
     });
@@ -162,17 +164,17 @@ router.post('/signup', rateLimit(5, 60000), async (req: Request, res: Response) 
     return res.status(200).json({
       status: 'PENDING_VERIFICATION',
       email: cleanEmail,
-      message: 'A 6-digit verification code has been dispatched.',
+      message: 'Account created. Please verify your email address using the 6-digit code sent to your inbox.',
     });
 
   } catch (error: any) {
     console.error('Signup error:', error);
-    return res.status(500).json({ error: 'Internal server error during registration.' });
+    return res.status(500).json({ error: 'Failed to process registration.' });
   }
 });
 
 // POST /api/auth/resend-code
-router.post('/resend-code', rateLimit(3, 60000), async (req: Request, res: Response) => {
+router.post('/resend-code', rateLimit(5, 60000), async (req: Request, res: Response) => {
   try {
     const { email } = req.body;
 
@@ -187,14 +189,9 @@ router.post('/resend-code', rateLimit(3, 60000), async (req: Request, res: Respo
     });
 
     if (!user) {
-      return res.status(404).json({ error: 'No registration found for this email.' });
+      return res.status(404).json({ error: 'Account not found.' });
     }
 
-    if (user.isVerified) {
-      return res.status(400).json({ error: 'This account is already verified. Please sign in.' });
-    }
-
-    // Generate fresh cryptographic 6-digit code
     const code = crypto.randomInt(100000, 1000000).toString();
     const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 mins expiry
 
@@ -206,15 +203,21 @@ router.post('/resend-code', rateLimit(3, 60000), async (req: Request, res: Respo
       },
     });
 
-    // Dispatch via Resend
-    sendVerificationEmail(cleanEmail, code).catch((err) => {
-      console.error('[Background Resend Dispatch Error]:', err);
-    });
+    // Dispatch via Resend (use 2FA template if user is verified with 2FA, else signup template)
+    if (user.isVerified && user.twoFactorEnabled) {
+      sendTwoFactorOtpEmail(cleanEmail, code).catch((err) => {
+        console.error('[Background Resend 2FA Dispatch Error]:', err);
+      });
+    } else {
+      sendVerificationEmail(cleanEmail, code).catch((err) => {
+        console.error('[Background Resend Dispatch Error]:', err);
+      });
+    }
 
     return res.status(200).json({
       status: 'CODE_RESENT',
       email: cleanEmail,
-      message: 'A new 6-digit verification code has been dispatched.',
+      message: 'A fresh 6-digit verification code has been dispatched to your email.',
     });
   } catch (error: any) {
     console.error('Resend code error:', error);
@@ -236,17 +239,18 @@ router.post('/verify-code', rateLimit(10, 60000), async (req: Request, res: Resp
 
     const user = await prisma.user.findUnique({
       where: { email: cleanEmail },
+      include: {
+        license: true,
+        subscription: true,
+      },
     });
 
     if (!user) {
       return res.status(404).json({ error: 'Verification profile not found.' });
     }
 
-    if (user.isVerified) {
-      return res.status(400).json({ error: 'This account is already verified. Please sign in.' });
-    }
-
-    if (user.verificationCode !== cleanCode) {
+    // Check code validity
+    if (!user.verificationCode || user.verificationCode !== cleanCode) {
       return res.status(400).json({ error: 'Invalid verification code. Please check your email.' });
     }
 
@@ -254,7 +258,45 @@ router.post('/verify-code', rateLimit(10, 60000), async (req: Request, res: Resp
       return res.status(400).json({ error: 'Verification code has expired. Please click "Resend Code".' });
     }
 
-    // Verify user and provision resources in a secure transaction block
+    // CASE 1: 2FA Login Verification (User is already verified)
+    if (user.isVerified) {
+      if (!user.twoFactorEnabled) {
+        return res.status(400).json({ error: 'This account is already verified. Please sign in.' });
+      }
+
+      // Clear 2FA OTP code
+      await prisma.user.update({
+        where: { id: user.id },
+        data: {
+          verificationCode: null,
+          verificationExpires: null,
+        },
+      });
+
+      const token = signToken({ id: user.id, email: user.email });
+
+      res.cookie('orbit_session', token, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'lax',
+        maxAge: 7 * 24 * 60 * 60 * 1000,
+      });
+
+      return res.status(200).json({
+        user: {
+          id: user.id,
+          email: user.email,
+          displayName: user.displayName || user.email.split('@')[0],
+          avatarUrl: user.avatarUrl || null,
+          role: user.role,
+          licenseKey: user.license?.licenseKey || '',
+          planTier: normalizeTier(user.subscription?.planTier || 'free'),
+        },
+        token,
+      });
+    }
+
+    // CASE 2: Initial Registration Handshake
     const result = await prisma.$transaction(async (tx: any) => {
       const verifiedUser = await tx.user.update({
         where: { id: user.id },
@@ -353,6 +395,30 @@ router.post('/login', rateLimit(10, 60000), async (req: Request, res: Response) 
         error: 'Email verification is pending. A fresh verification code has been dispatched.',
         status: 'PENDING_VERIFICATION',
         email: user.email,
+      });
+    }
+
+    // Handle Two-Factor Authentication (2FA) Challenge
+    if (user.twoFactorEnabled) {
+      const code = crypto.randomInt(100000, 1000000).toString();
+      const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 mins expiry
+
+      await prisma.user.update({
+        where: { id: user.id },
+        data: {
+          verificationCode: code,
+          verificationExpires: expiresAt,
+        },
+      });
+
+      sendTwoFactorOtpEmail(user.email, code).catch((err) => {
+        console.error('[Background 2FA Dispatch Error during Login]:', err);
+      });
+
+      return res.status(200).json({
+        status: 'REQUIRES_2FA',
+        email: user.email,
+        message: 'Two-Factor Authentication is active. A 6-digit login security code has been sent to your email.',
       });
     }
 

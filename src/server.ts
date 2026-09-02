@@ -122,7 +122,7 @@ app.use((err: any, req: express.Request, res: express.Response, next: express.Ne
   res.status(500).json({ error: 'Internal server error occurred.' });
 });
 
-// Ensure avatarUrl column exists (raw SQL fallback for databases missing the column)
+// Ensure avatarUrl and twoFactorEnabled columns exist (raw SQL fallback for databases)
 async function ensureSchema() {
   try {
     const result = (await prisma.$queryRawUnsafe("PRAGMA table_info('User')")) as Array<{ name: string }>;
@@ -130,11 +130,15 @@ async function ensureSchema() {
     if (!hasAvatarUrl) {
       await prisma.$executeRawUnsafe('ALTER TABLE "User" ADD COLUMN "avatarUrl" TEXT');
       console.log('[Schema] Added missing avatarUrl column to User table.');
-    } else {
-      console.log('[Schema] avatarUrl column already exists.');
+    }
+
+    const hasTwoFactor = result.some((col: { name: string }) => col.name === 'twoFactorEnabled');
+    if (!hasTwoFactor) {
+      await prisma.$executeRawUnsafe('ALTER TABLE "User" ADD COLUMN "twoFactorEnabled" BOOLEAN DEFAULT 0');
+      console.log('[Schema] Added missing twoFactorEnabled column to User table.');
     }
   } catch (err: any) {
-    console.error('[Schema] Failed to ensure avatarUrl column:', err.message);
+    console.error('[Schema] Failed to ensure schema columns:', err.message);
   }
 }
 
