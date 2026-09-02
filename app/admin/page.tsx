@@ -421,6 +421,15 @@ function AdminContent() {
         if (data.controlServer && data.controlServer.status === 'ONLINE') {
           liveData = {
             ...data.controlServer,
+            database: {
+              engine: data.controlServer.database?.engine || 'Local JSON DB',
+              connected: data.controlServer.database?.connected ?? true,
+              activeUsersCount: data.controlServer.database?.usersCount ?? data.controlServer.database?.activeUsersCount ?? 0,
+              onlineUsersCount: data.controlServer.database?.onlineUsersCount ?? 0,
+              projectsCount: data.controlServer.database?.projectsCount ?? 0,
+              pgConfigured: data.controlServer.database?.pgConfigured ?? false,
+              pgError: data.controlServer.database?.pgError || '',
+            },
             pingMs: Date.now() - startTime,
             lastChecked: new Date().toLocaleTimeString()
           };
@@ -1354,10 +1363,10 @@ function AdminContent() {
                         <div style={{ background: 'rgba(12, 10, 10, 0.7)', border: '1px solid rgba(255,255,255,0.06)', borderRadius: '10px', padding: '18px' }}>
                           <span style={{ fontSize: '0.75rem', color: '#808085', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '1px' }}>Database Health</span>
                           <div style={{ fontSize: '1.1rem', fontWeight: 800, color: '#fff', margin: '8px 0 4px 0', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                            {controlServer.database.engine.includes('PostgreSQL') ? '🐘 PostgreSQL' : '💾 Local JSON DB'}
+                            {(controlServer.database?.engine || 'Local JSON DB').includes('PostgreSQL') ? '🐘 PostgreSQL' : '💾 Local JSON DB'}
                           </div>
-                          <div style={{ fontSize: '0.75rem', color: controlServer.database.connected ? '#00e676' : '#ffab00' }}>
-                            {controlServer.database.connected ? '● Active Connection Pool' : '⚠️ Fallback Mode (Supabase Failure)'}
+                          <div style={{ fontSize: '0.75rem', color: controlServer.database?.connected ? '#00e676' : '#ffab00' }}>
+                            {controlServer.database?.connected ? '● Active Connection Pool' : '⚠️ Fallback Mode (Supabase Failure)'}
                           </div>
                         </div>
 
@@ -1365,10 +1374,10 @@ function AdminContent() {
                         <div style={{ background: 'rgba(12, 10, 10, 0.7)', border: '1px solid rgba(255,255,255,0.06)', borderRadius: '10px', padding: '18px' }}>
                           <span style={{ fontSize: '0.75rem', color: '#808085', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '1px' }}>Delta Cloud Storage</span>
                           <div style={{ fontSize: '1.5rem', fontWeight: 900, color: '#fff', margin: '8px 0 4px 0', fontFamily: 'monospace' }}>
-                            {(controlServer.storage.deltaSizeBytes / (1024 * 1024)).toFixed(2)} MB
+                            {((controlServer.storage?.deltaSizeBytes || 0) / (1024 * 1024)).toFixed(2)} MB
                           </div>
                           <div style={{ fontSize: '0.75rem', color: '#ff859f' }}>
-                            📦 {controlServer.storage.deltaBlobsCount} Stored Sync Blobs
+                            📦 {controlServer.storage?.deltaBlobsCount || 0} Stored Sync Blobs
                           </div>
                         </div>
 
@@ -1386,19 +1395,19 @@ function AdminContent() {
                           <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
                             <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid rgba(255,255,255,0.04)', paddingBottom: '8px' }}>
                               <span style={{ color: '#808085', fontSize: '0.85rem' }}>Primary Database Driver</span>
-                              <span style={{ color: '#fff', fontSize: '0.85rem', fontWeight: 'bold' }}>{controlServer.database.engine}</span>
+                              <span style={{ color: '#fff', fontSize: '0.85rem', fontWeight: 'bold' }}>{controlServer.database?.engine || 'Local JSON DB'}</span>
                             </div>
                             <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid rgba(255,255,255,0.04)', paddingBottom: '8px' }}>
                               <span style={{ color: '#808085', fontSize: '0.85rem' }}>Total Registered Users</span>
-                              <span style={{ color: '#fff', fontSize: '0.85rem', fontWeight: 'bold', fontFamily: 'monospace' }}>{controlServer.database.activeUsersCount}</span>
+                              <span style={{ color: '#fff', fontSize: '0.85rem', fontWeight: 'bold', fontFamily: 'monospace' }}>{controlServer.database?.activeUsersCount ?? 0}</span>
                             </div>
                             <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid rgba(255,255,255,0.04)', paddingBottom: '8px' }}>
                               <span style={{ color: '#808085', fontSize: '0.85rem' }}>Online Real-Time Presence</span>
-                              <span style={{ color: '#00e676', fontSize: '0.85rem', fontWeight: 'bold', fontFamily: 'monospace' }}>{controlServer.database.onlineUsersCount} Users Online</span>
+                              <span style={{ color: '#00e676', fontSize: '0.85rem', fontWeight: 'bold', fontFamily: 'monospace' }}>{controlServer.database?.onlineUsersCount ?? 0} Users Online</span>
                             </div>
                             <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                               <span style={{ color: '#808085', fontSize: '0.85rem' }}>Active Projects Registered</span>
-                              <span style={{ color: '#fff', fontSize: '0.85rem', fontWeight: 'bold', fontFamily: 'monospace' }}>{controlServer.database.projectsCount} Projects</span>
+                              <span style={{ color: '#fff', fontSize: '0.85rem', fontWeight: 'bold', fontFamily: 'monospace' }}>{controlServer.database?.projectsCount ?? 0} Projects</span>
                             </div>
                           </div>
                         </div>
