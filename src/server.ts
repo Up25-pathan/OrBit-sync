@@ -125,10 +125,8 @@ app.use((err: any, req: express.Request, res: express.Response, next: express.Ne
 // Ensure avatarUrl column exists (raw SQL fallback for databases missing the column)
 async function ensureSchema() {
   try {
-    const result = await prisma.$queryRawUnsafe<{ name: string }[]>(
-      "PRAGMA table_info('User')"
-    );
-    const hasAvatarUrl = result.some((col) => col.name === 'avatarUrl');
+    const result = (await prisma.$queryRawUnsafe("PRAGMA table_info('User')")) as Array<{ name: string }>;
+    const hasAvatarUrl = result.some((col: { name: string }) => col.name === 'avatarUrl');
     if (!hasAvatarUrl) {
       await prisma.$executeRawUnsafe('ALTER TABLE "User" ADD COLUMN "avatarUrl" TEXT');
       console.log('[Schema] Added missing avatarUrl column to User table.');

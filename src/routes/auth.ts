@@ -1,7 +1,5 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import crypto from 'crypto';
-import nodemailer from 'nodemailer';
-import dns from 'dns';
 import { prisma } from '../db';
 import { hashPassword, verifyPassword, signToken, verifyToken } from '../auth';
 import { generateLicenseKey, normalizeTier } from '../utils/licenseGenerator';
@@ -20,7 +18,7 @@ function rateLimit(maxRequests: number, windowMs: number) {
       return next();
     }
     if (entry.count >= maxRequests) {
-      return res.status(429).json({ error: 'Too many requests. Please try again later.' });
+      return res.status(429).json({ error: 'Too many requests. Please try again in a minute.' });
     }
     entry.count++;
     next();
@@ -53,37 +51,10 @@ const resolveClientUrl = (req: Request): string => {
       if (parsed.origin && ALLOWED_ORIGINS.some((o) => parsed.origin.startsWith(o))) {
         dynamicUrl = parsed.origin;
       }
-    } catch (e) {}
+    } catch (e) { }
   }
   return dynamicUrl || process.env.CLIENT_URL || 'http://localhost:3000';
 };
-
-// Nodemailer SMTP setup
-const smtpHost = process.env.SMTP_HOST || '';
-const smtpPort = parseInt(process.env.SMTP_PORT || '587');
-const smtpUser = process.env.SMTP_USER || '';
-const smtpPass = process.env.SMTP_PASS || '';
-
-// Custom DNS lookup forcing IPv4 resolution for Nodemailer sockets
-const customLookup = (hostname: string, options: any, callback: any) => {
-  return dns.lookup(hostname, { ...options, family: 4 }, callback);
-};
-
-const transporter = smtpHost && smtpUser && smtpPass
-  ? nodemailer.createTransport({
-      host: smtpHost,
-      port: smtpPort,
-      secure: smtpPort === 465, // true for 465, false for 587
-      auth: {
-        user: smtpUser,
-        pass: smtpPass
-      },
-      tls: {
-        rejectUnauthorized: false
-      },
-      lookup: customLookup
-    } as any)
-  : null;
 
 // Helper to provision default license and subscription for new users
 async function provisionUserDefaultResources(tx: any, userId: string) {
@@ -112,85 +83,116 @@ async function provisionUserDefaultResources(tx: any, userId: string) {
   });
 }
 
-// Background Email Helper Definition
+// ----------------------------------------------------
+// RESEND HTTPS REST API EMAIL DISPATCHER
+// ----------------------------------------------------
 const sendVerificationEmail = async (targetEmail: string, verificationCode: string) => {
-  const brevoKey = process.env.BREVO_API_KEY;
-  const senderEmail = process.env.SMTP_FROM_EMAIL || process.env.SMTP_USER || 'security@orbit.dev';
+  const resendApiKey = process.env.RESEND_API_KEY || '';
+  const senderFrom = process.env.RESEND_FROM_EMAIL || 'OrBit Security <onboarding@resend.dev>';
 
-  const subject = 'OrBit Portal - Verify Your Email';
+  const subject = `Your OrBit Security Code: ${verificationCode}`;
   const htmlContent = `
-    <div style="background:#0c0a0a; color:#fff; padding:30px; font-family:sans-serif; border:1px solid #ff003c; border-radius:8px; max-width: 480px; margin: 0 auto;">
-      <h2 style="color:#ff003c; text-align: center; font-family: monospace;">Email Verification</h2>
-      <p>Welcome to OrBit Platform. Use the code below to complete your developer registration:</p>
-      <div style="font-size:36px; font-weight:bold; letter-spacing:6px; padding:15px; background:#181414; border-radius:6px; text-align:center; color:#ff003c; margin:25px 0; border: 1px solid rgba(255, 0, 60, 0.2);">${verificationCode}</div>
-      <p style="color:#808085; font-size:12px; text-align: center;">This verification code is valid for 15 minutes.</p>
-    </div>
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <title>OrBit Verification Code</title>
+    </head>
+    <body style="margin:0; padding:0; background-color:#030303; font-family:-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; color:#ffffff;">
+      <table border="0" cellpadding="0" cellspacing="0" width="100%" style="background-color:#030303; padding: 40px 10px;">
+        <tr>
+          <td align="center">
+            <table border="0" cellpadding="0" cellspacing="0" width="100%" style="max-width: 500px; background-color:#0a0808; border: 1px solid rgba(255, 0, 60, 0.35); border-radius: 16px; overflow: hidden; box-shadow: 0 0 40px rgba(255, 0, 60, 0.15);">
+              <tr>
+                <td style="padding: 35px 35px 20px 35px; text-align: center; border-bottom: 1px solid rgba(255, 255, 255, 0.06);">
+                  <div style="font-family: monospace, Courier, monospace; font-size: 24px; font-weight: 900; letter-spacing: 3px; color: #ffffff; text-transform: uppercase;">
+                    ORBIT<span style="color: #ff003c;">.SYNC</span>
+                  </div>
+                  <div style="color: #808085; font-size: 11px; letter-spacing: 1.5px; text-transform: uppercase; margin-top: 5px;">
+                    Local-First Synchronization Engine
+                  </div>
+                </td>
+              </tr>
+              <tr>
+                <td style="padding: 35px;">
+                  <h2 style="margin: 0 0 15px 0; color: #ffffff; font-size: 20px; font-weight: 700; letter-spacing: -0.5px;">
+                    Email Verification Handshake
+                  </h2>
+                  <p style="margin: 0 0 25px 0; color: #a0a0a5; font-size: 14px; line-height: 1.6;">
+                    You are authenticating developer credentials for <strong style="color: #ffffff;">${targetEmail}</strong>. Use the security code below to complete registration:
+                  </p>
+                  
+                  <div style="background: #120d0e; border: 1.5px solid #ff003c; border-radius: 10px; padding: 20px; text-align: center; margin-bottom: 25px;">
+                    <div style="font-family: monospace, Courier, monospace; font-size: 38px; font-weight: 900; letter-spacing: 10px; color: #ff003c; text-shadow: 0 0 15px rgba(255, 0, 60, 0.5);">
+                      ${verificationCode}
+                    </div>
+                  </div>
+
+                  <p style="margin: 0 0 10px 0; color: #808085; font-size: 12px; line-height: 1.5; text-align: center;">
+                    ⏳ This code is valid for <strong style="color: #ff003c;">10 minutes</strong>.
+                  </p>
+                  <p style="margin: 0; color: #606065; font-size: 11px; text-align: center;">
+                    If you did not request this code, you can safely ignore this email.
+                  </p>
+                </td>
+              </tr>
+              <tr>
+                <td style="padding: 20px 35px; background: #060505; border-top: 1px solid rgba(255, 255, 255, 0.06); text-align: center;">
+                  <p style="margin: 0; color: #505055; font-size: 11px;">
+                    OrBit Mesh Protocol &bull; Zero-Knowledge P2P Infrastructure
+                  </p>
+                </td>
+              </tr>
+            </table>
+          </td>
+        </tr>
+      </table>
+    </body>
+    </html>
   `;
 
-  if (brevoKey) {
+  if (resendApiKey) {
     try {
-      console.log(`[Brevo Mailer] Dispatching verification email via HTTPS REST API to ${targetEmail}...`);
-      const apiRes = await fetch('https://api.brevo.com/v3/smtp/email', {
+      console.log(`[Resend Mailer] Dispatching OTP email via HTTPS REST API to ${targetEmail}...`);
+      const response = await fetch('https://api.resend.com/emails', {
         method: 'POST',
         headers: {
-          'accept': 'application/json',
-          'api-key': brevoKey,
-          'content-type': 'application/json'
+          'Authorization': `Bearer ${resendApiKey}`,
+          'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          sender: {
-            name: "OrBit Security",
-            email: senderEmail
-          },
-          to: [
-            {
-              email: targetEmail
-            }
-          ],
+          from: senderFrom,
+          to: [targetEmail],
           subject: subject,
-          htmlContent: htmlContent
-        })
+          html: htmlContent,
+        }),
       });
 
-      const resData = await apiRes.json();
-      if (apiRes.ok) {
-        console.log(`[Brevo Mailer] Verification email successfully sent to ${targetEmail}`);
+      const resData: any = await response.json();
+      if (response.ok) {
+        console.log(`[Resend Mailer] Verification email successfully sent! ID: ${resData.id}`);
+        return { success: true, id: resData.id };
       } else {
-        console.error('[Brevo Mailer Error] API returned error response:', resData);
+        console.error('[Resend Mailer Error] API returned error:', resData);
+        return { success: false, error: resData };
       }
     } catch (err) {
-      console.error('[Brevo Mailer Error] REST API connection failed:', err);
-    }
-  } else if (transporter) {
-    try {
-      console.log(`[SMTP Mailer] Dispatching verification email to ${targetEmail}...`);
-      await transporter.sendMail({
-        from: `"OrBit Security" <${senderEmail}>`,
-        to: targetEmail,
-        subject: subject,
-        text: `Your email verification code is: ${verificationCode}. It expires in 15 minutes.`,
-        html: htmlContent,
-      });
-      console.log(`[SMTP Mailer] Verification email successfully sent to ${targetEmail}`);
-    } catch (err) {
-      console.error('[SMTP Mailer Error] Failed to send SMTP email:', err);
-      console.log(`=========================================`);
-      console.log(`[SMTP Fallback Logs] EMAIL VERIFICATION CODE (SMTP Failed)`);
-      console.log(`Recipient: ${targetEmail}`);
-      console.log(`Verification Code: ${verificationCode}`);
-      console.log(`=========================================`);
+      console.error('[Resend Mailer Error] HTTPS fetch failed:', err);
+      return { success: false, error: err };
     }
   } else {
     console.log(`=========================================`);
-    console.log(`[SMTP Sandbox] EMAIL VERIFICATION CODE`);
+    console.log(`[Fallback Log] EMAIL VERIFICATION CODE`);
     console.log(`Recipient: ${targetEmail}`);
     console.log(`Verification Code: ${verificationCode}`);
     console.log(`=========================================`);
+    return { success: true, fallback: true };
   }
 };
 
 // ----------------------------------------------------
-// SECTION A: EMAIL & PASSWORD REGISTRATION WITH CODES
+// SECTION A: EMAIL & PASSWORD REGISTRATION WITH OTP
 // ----------------------------------------------------
 
 // POST /api/auth/signup
@@ -202,31 +204,55 @@ router.post('/signup', rateLimit(5, 60000), async (req: Request, res: Response) 
       return res.status(400).json({ error: 'Email and password are required.' });
     }
 
+    const cleanEmail = email.trim().toLowerCase();
+
     if (password.length < 6) {
       return res.status(400).json({ error: 'Password must be at least 6 characters long.' });
     }
 
     // Check if user already exists
     const existingUser = await prisma.user.findUnique({
-      where: { email },
+      where: { email: cleanEmail },
     });
 
-    if (existingUser) {
-      return res.status(409).json({ error: 'An account with this email already exists.' });
-    }
-
-    // Hash password
+    // Generate cryptographic 6-digit OTP
+    const code = crypto.randomInt(100000, 1000000).toString();
+    const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 mins expiry
     const passwordHash = hashPassword(password);
 
-    // Generate 6-digit verification code
-    const code = Math.floor(100000 + Math.random() * 900000).toString();
-    const expiresAt = new Date(Date.now() + 15 * 60 * 1000); // 15 mins expiry
+    if (existingUser) {
+      if (existingUser.isVerified) {
+        return res.status(409).json({ error: 'An account with this email already exists. Please log in.' });
+      }
 
-    // Save unverified user profile in database
+      // If user exists but is unverified, refresh their password & verification code and resend
+      await prisma.user.update({
+        where: { id: existingUser.id },
+        data: {
+          passwordHash,
+          displayName: displayName || cleanEmail.split('@')[0],
+          verificationCode: code,
+          verificationExpires: expiresAt,
+        },
+      });
+
+      // Dispatch email via Resend
+      sendVerificationEmail(cleanEmail, code).catch((err) => {
+        console.error('[Background Resend Dispatch Error]:', err);
+      });
+
+      return res.status(200).json({
+        status: 'PENDING_VERIFICATION',
+        email: cleanEmail,
+        message: 'A fresh 6-digit verification code has been dispatched.',
+      });
+    }
+
+    // Save new unverified user profile
     await prisma.user.create({
       data: {
-        email,
-        displayName: displayName || email.split('@')[0],
+        email: cleanEmail,
+        displayName: displayName || cleanEmail.split('@')[0],
         passwordHash,
         isVerified: false,
         verificationCode: code,
@@ -234,20 +260,71 @@ router.post('/signup', rateLimit(5, 60000), async (req: Request, res: Response) 
       },
     });
 
-    // Dispatch email in the background without awaiting it to keep responses instant (prevents frontend freeze)
-    sendVerificationEmail(email, code).catch((err) => {
-      console.error('[Background Email Dispatch Error]:', err);
+    // Dispatch email via Resend
+    sendVerificationEmail(cleanEmail, code).catch((err) => {
+      console.error('[Background Resend Dispatch Error]:', err);
     });
 
     return res.status(200).json({
       status: 'PENDING_VERIFICATION',
-      email,
+      email: cleanEmail,
       message: 'A 6-digit verification code has been dispatched.',
     });
 
   } catch (error: any) {
     console.error('Signup error:', error);
     return res.status(500).json({ error: 'Internal server error during registration.' });
+  }
+});
+
+// POST /api/auth/resend-code
+router.post('/resend-code', rateLimit(3, 60000), async (req: Request, res: Response) => {
+  try {
+    const { email } = req.body;
+
+    if (!email) {
+      return res.status(400).json({ error: 'Email address is required.' });
+    }
+
+    const cleanEmail = email.trim().toLowerCase();
+
+    const user = await prisma.user.findUnique({
+      where: { email: cleanEmail },
+    });
+
+    if (!user) {
+      return res.status(404).json({ error: 'No registration found for this email.' });
+    }
+
+    if (user.isVerified) {
+      return res.status(400).json({ error: 'This account is already verified. Please sign in.' });
+    }
+
+    // Generate fresh cryptographic 6-digit code
+    const code = crypto.randomInt(100000, 1000000).toString();
+    const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 mins expiry
+
+    await prisma.user.update({
+      where: { id: user.id },
+      data: {
+        verificationCode: code,
+        verificationExpires: expiresAt,
+      },
+    });
+
+    // Dispatch via Resend
+    sendVerificationEmail(cleanEmail, code).catch((err) => {
+      console.error('[Background Resend Dispatch Error]:', err);
+    });
+
+    return res.status(200).json({
+      status: 'CODE_RESENT',
+      email: cleanEmail,
+      message: 'A new 6-digit verification code has been dispatched.',
+    });
+  } catch (error: any) {
+    console.error('Resend code error:', error);
+    return res.status(500).json({ error: 'Failed to resend verification code.' });
   }
 });
 
@@ -260,8 +337,11 @@ router.post('/verify-code', rateLimit(10, 60000), async (req: Request, res: Resp
       return res.status(400).json({ error: 'Email and verification code are required.' });
     }
 
+    const cleanEmail = email.trim().toLowerCase();
+    const cleanCode = code.toString().trim();
+
     const user = await prisma.user.findUnique({
-      where: { email },
+      where: { email: cleanEmail },
     });
 
     if (!user) {
@@ -269,19 +349,19 @@ router.post('/verify-code', rateLimit(10, 60000), async (req: Request, res: Resp
     }
 
     if (user.isVerified) {
-      return res.status(400).json({ error: 'This account is already verified.' });
+      return res.status(400).json({ error: 'This account is already verified. Please sign in.' });
     }
 
-    if (user.verificationCode !== code) {
-      return res.status(400).json({ error: 'Invalid verification code.' });
+    if (user.verificationCode !== cleanCode) {
+      return res.status(400).json({ error: 'Invalid verification code. Please check your email.' });
     }
 
     if (user.verificationExpires && user.verificationExpires < new Date()) {
-      return res.status(400).json({ error: 'Verification code has expired. Please signup again.' });
+      return res.status(400).json({ error: 'Verification code has expired. Please click "Resend Code".' });
     }
 
     // Verify user and provision resources in a secure transaction block
-    const result = await prisma.$transaction(async (tx) => {
+    const result = await prisma.$transaction(async (tx: any) => {
       const verifiedUser = await tx.user.update({
         where: { id: user.id },
         data: {
@@ -337,8 +417,10 @@ router.post('/login', rateLimit(10, 60000), async (req: Request, res: Response) 
       return res.status(400).json({ error: 'Email and password are required.' });
     }
 
+    const cleanEmail = email.trim().toLowerCase();
+
     const user = await prisma.user.findUnique({
-      where: { email },
+      where: { email: cleanEmail },
       include: {
         license: true,
         subscription: true,
@@ -355,11 +437,10 @@ router.post('/login', rateLimit(10, 60000), async (req: Request, res: Response) 
       return res.status(401).json({ error: 'Invalid email or password.' });
     }
 
-    // Block unverified logins
+    // Block unverified logins and dispatch a fresh code
     if (!user.isVerified) {
-      // Generate a new verification code
-      const code = Math.floor(100000 + Math.random() * 900000).toString();
-      const expiresAt = new Date(Date.now() + 15 * 60 * 1000); // 15 mins expiry
+      const code = crypto.randomInt(100000, 1000000).toString();
+      const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 mins expiry
 
       await prisma.user.update({
         where: { id: user.id },
@@ -369,13 +450,13 @@ router.post('/login', rateLimit(10, 60000), async (req: Request, res: Response) 
         },
       });
 
-      // Dispatch email in the background
+      // Dispatch email via Resend
       sendVerificationEmail(user.email, code).catch((err) => {
-        console.error('[Background Email Dispatch Error during Login]:', err);
+        console.error('[Background Resend Dispatch Error during Login]:', err);
       });
 
       return res.status(403).json({
-        error: 'Email verification is pending. A new code has been sent.',
+        error: 'Email verification is pending. A fresh verification code has been dispatched.',
         status: 'PENDING_VERIFICATION',
         email: user.email,
       });
@@ -479,7 +560,7 @@ router.get('/google/callback', async (req: Request, res: Response) => {
 
       if (!user) {
         // Create verified Google user directly
-        user = await prisma.$transaction(async (tx) => {
+        user = await prisma.$transaction(async (tx: any) => {
           const u = await tx.user.create({
             data: { email: mockEmail, passwordHash: 'oauth_dummy_hash_2026', isVerified: true },
           });
@@ -517,7 +598,7 @@ router.get('/google/callback', async (req: Request, res: Response) => {
     let user = await prisma.user.findUnique({ where: { email }, include: { license: true, subscription: true } });
 
     if (!user) {
-      user = await prisma.$transaction(async (tx) => {
+      user = await prisma.$transaction(async (tx: any) => {
         const u = await tx.user.create({
           data: { email, passwordHash: crypto.randomBytes(16).toString('hex'), isVerified: true },
         });
@@ -550,7 +631,7 @@ router.get('/github/callback', async (req: Request, res: Response) => {
       let user = await prisma.user.findUnique({ where: { email: mockEmail }, include: { license: true, subscription: true } });
 
       if (!user) {
-        user = await prisma.$transaction(async (tx) => {
+        user = await prisma.$transaction(async (tx: any) => {
           const u = await tx.user.create({
             data: { email: mockEmail, passwordHash: 'oauth_dummy_hash_2026', isVerified: true },
           });
@@ -602,7 +683,7 @@ router.get('/github/callback', async (req: Request, res: Response) => {
       if (Array.isArray(emails)) {
         primaryEmail = emails.find((e: any) => e.primary)?.email || emails[0]?.email || primaryEmail;
       }
-    } catch (e) {}
+    } catch (e) { }
 
     if (!primaryEmail) {
       primaryEmail = userProfile.login ? `${userProfile.login}@github.com` : `user_${Date.now()}@github.com`;
@@ -611,7 +692,7 @@ router.get('/github/callback', async (req: Request, res: Response) => {
     let user = await prisma.user.findUnique({ where: { email: primaryEmail }, include: { license: true, subscription: true } });
 
     if (!user) {
-      user = await prisma.$transaction(async (tx) => {
+      user = await prisma.$transaction(async (tx: any) => {
         const u = await tx.user.create({
           data: { email: primaryEmail, passwordHash: crypto.randomBytes(16).toString('hex'), isVerified: true },
         });
