@@ -38,7 +38,7 @@ const allowedOrigins = [
   'http://localhost:9090',
   'https://orbit-sync.onrender.com',
   'https://orbitcollab-three.vercel.app',
-  'https://orbit-server-ymao.onrender.com',
+  'https://orbit-server-xbr5.onrender.com',
   'tauri://localhost',
   'https://tauri.localhost',
 ];
