@@ -1,11 +1,11 @@
-import { Response } from 'express';
+import { Router, Response } from 'express';
 import crypto from 'crypto';
 import { prisma } from '../db';
-import { AuthRequest, authenticateJWT, hashPassword } from '../auth';
+import { AuthRequest, authenticateJWT, hashPassword, verifyPassword } from '../auth';
 import { generateLicenseKey, parseLicenseKey, normalizeTier } from '../utils/licenseGenerator';
+import { sendPasswordChangeOtpEmail } from '../utils/mailer';
 
-const express = require('express');
-const router = express.Router();
+const router = Router();
 
 // GET /api/console/dashboard
 router.get('/dashboard', authenticateJWT, async (req: AuthRequest, res: Response) => {
@@ -115,7 +115,7 @@ router.get('/dashboard', authenticateJWT, async (req: AuthRequest, res: Response
 router.post('/profile/update', authenticateJWT, async (req: AuthRequest, res: Response) => {
   try {
     const userId = req.user?.id;
-    const { displayName, avatarUrl, newPassword } = req.body;
+    const { displayName, avatarUrl } = req.body;
 
     if (!userId) {
       return res.status(401).json({ error: 'Unauthorized.' });
@@ -124,9 +124,6 @@ router.post('/profile/update', authenticateJWT, async (req: AuthRequest, res: Re
     const updateData: any = {};
     if (displayName !== undefined) updateData.displayName = String(displayName).trim();
     if (avatarUrl !== undefined) updateData.avatarUrl = String(avatarUrl).trim();
-    if (newPassword && String(newPassword).trim().length > 0) {
-      updateData.passwordHash = hashPassword(String(newPassword).trim());
-    }
 
     const updatedUser = await prisma.user.update({
       where: { id: userId },
@@ -146,6 +143,138 @@ router.post('/profile/update', authenticateJWT, async (req: AuthRequest, res: Re
   } catch (err: any) {
     console.error('Error updating profile:', err);
     return res.status(500).json({ error: 'Failed to update profile settings.' });
+  }
+});
+
+// ----------------------------------------------------
+// SECURE OTP PASSWORD CHANGE ENDPOINTS
+// ----------------------------------------------------
+
+// POST /api/console/password/request-otp
+router.post('/password/request-otp', authenticateJWT, async (req: AuthRequest, res: Response) => {
+  try {
+    const userId = req.user?.id;
+    const { currentPassword, newPassword } = req.body;
+
+    if (!userId) {
+      return res.status(401).json({ error: 'Unauthorized.' });
+    }
+
+    if (!currentPassword || !newPassword) {
+      return res.status(400).json({ error: 'Current password and new password are required.' });
+    }
+
+    if (String(newPassword).trim().length < 6) {
+      return res.status(400).json({ error: 'New password must be at least 6 characters long.' });
+    }
+
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+    });
+
+    if (!user) {
+      return res.status(404).json({ error: 'User account not found.' });
+    }
+
+    // Verify that current password is correct
+    const isCurrentValid = verifyPassword(currentPassword, user.passwordHash);
+    if (!isCurrentValid) {
+      return res.status(400).json({ error: 'The current password you entered is incorrect.' });
+    }
+
+    // Generate cryptographic 6-digit OTP
+    const code = crypto.randomInt(100000, 1000000).toString();
+    const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 mins expiry
+
+    await prisma.user.update({
+      where: { id: userId },
+      data: {
+        verificationCode: code,
+        verificationExpires: expiresAt,
+      },
+    });
+
+    // Dispatch Security Alert OTP email via Resend
+    sendPasswordChangeOtpEmail(user.email, code).catch((err) => {
+      console.error('[Background Password OTP Dispatch Error]:', err);
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: 'A 6-digit security confirmation code has been dispatched to your email.',
+      email: user.email,
+    });
+  } catch (err: any) {
+    console.error('Password request OTP error:', err);
+    return res.status(500).json({ error: 'Failed to generate password verification code.' });
+  }
+});
+
+// POST /api/console/password/verify-and-update
+router.post('/password/verify-and-update', authenticateJWT, async (req: AuthRequest, res: Response) => {
+  try {
+    const userId = req.user?.id;
+    const { code, currentPassword, newPassword } = req.body;
+
+    if (!userId) {
+      return res.status(401).json({ error: 'Unauthorized.' });
+    }
+
+    if (!code || !currentPassword || !newPassword) {
+      return res.status(400).json({ error: 'Verification code, current password, and new password are required.' });
+    }
+
+    const cleanCode = String(code).trim();
+    const cleanNewPass = String(newPassword).trim();
+
+    if (cleanNewPass.length < 6) {
+      return res.status(400).json({ error: 'New password must be at least 6 characters long.' });
+    }
+
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+    });
+
+    if (!user) {
+      return res.status(404).json({ error: 'User account not found.' });
+    }
+
+    // Verify current password again
+    const isCurrentValid = verifyPassword(currentPassword, user.passwordHash);
+    if (!isCurrentValid) {
+      return res.status(400).json({ error: 'Current password verification failed.' });
+    }
+
+    // Verify OTP code
+    if (!user.verificationCode || user.verificationCode !== cleanCode) {
+      return res.status(400).json({ error: 'Invalid verification code. Please check your email.' });
+    }
+
+    // Check expiry
+    if (user.verificationExpires && user.verificationExpires < new Date()) {
+      return res.status(400).json({ error: 'Verification code has expired. Please request a new one.' });
+    }
+
+    // Hash new password
+    const newPasswordHash = hashPassword(cleanNewPass);
+
+    // Update password and invalidate OTP code
+    await prisma.user.update({
+      where: { id: userId },
+      data: {
+        passwordHash: newPasswordHash,
+        verificationCode: null,
+        verificationExpires: null,
+      },
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: 'Password updated successfully! Your account is secure.',
+    });
+  } catch (err: any) {
+    console.error('Password verify and update error:', err);
+    return res.status(500).json({ error: 'Failed to update password.' });
   }
 });
 
