@@ -98,10 +98,234 @@ function ConsoleContent() {
   const [avatarUrl, setAvatarUrl] = useState('');
   const [customSeed, setCustomSeed] = useState('');
   const [profileEmail, setProfileEmail] = useState('');
-  const [newPassword, setNewPassword] = useState('');
-  const [twoFactor, setTwoFactor] = useState(false);
   const [userRole, setUserRole] = useState<'USER' | 'ADMIN'>('USER');
+  const [twoFactor, setTwoFactor] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Dedicated Password Change & Security OTP States
+  const [currentPassword, setCurrentPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [passwordLoading, setPasswordLoading] = useState(false);
+  const [passwordError, setPasswordError] = useState('');
+  const [passwordSuccess, setPasswordSuccess] = useState('');
+
+  // Password OTP Modal States
+  const [showPasswordOtpModal, setShowPasswordOtpModal] = useState(false);
+  const [passwordOtpDigits, setPasswordOtpDigits] = useState<string[]>(['', '', '', '', '', '']);
+  const passwordOtpRefs = useRef<(HTMLInputElement | null)[]>([]);
+  const [passwordOtpLoading, setPasswordOtpLoading] = useState(false);
+  const [passwordOtpError, setPasswordOtpError] = useState('');
+  const [passwordResendCooldown, setPasswordResendCooldown] = useState(0);
+  const [passwordResendMessage, setPasswordResendMessage] = useState('');
+
+  useEffect(() => {
+    if (passwordResendCooldown <= 0) return;
+    const timer = setInterval(() => {
+      setPasswordResendCooldown((prev) => prev - 1);
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [passwordResendCooldown]);
+
+  useEffect(() => {
+    if (showPasswordOtpModal) {
+      setPasswordOtpDigits(['', '', '', '', '', '']);
+      setTimeout(() => {
+        passwordOtpRefs.current[0]?.focus();
+      }, 150);
+    }
+  }, [showPasswordOtpModal]);
+
+  const handlePasswordOtpChange = (index: number, val: string) => {
+    const sanitized = val.replace(/\D/g, '');
+    if (!sanitized) {
+      const newDigits = [...passwordOtpDigits];
+      newDigits[index] = '';
+      setPasswordOtpDigits(newDigits);
+      return;
+    }
+
+    if (sanitized.length > 1) {
+      const newDigits = [...passwordOtpDigits];
+      const chars = sanitized.slice(0, 6).split('');
+      chars.forEach((char, i) => {
+        if (index + i < 6) {
+          newDigits[index + i] = char;
+        }
+      });
+      setPasswordOtpDigits(newDigits);
+      const nextIndex = Math.min(index + chars.length, 5);
+      passwordOtpRefs.current[nextIndex]?.focus();
+      return;
+    }
+
+    const newDigits = [...passwordOtpDigits];
+    newDigits[index] = sanitized[0];
+    setPasswordOtpDigits(newDigits);
+
+    if (index < 5 && sanitized[0]) {
+      passwordOtpRefs.current[index + 1]?.focus();
+    }
+  };
+
+  const handlePasswordOtpKeyDown = (index: number, e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Backspace') {
+      if (!passwordOtpDigits[index] && index > 0) {
+        const newDigits = [...passwordOtpDigits];
+        newDigits[index - 1] = '';
+        setPasswordOtpDigits(newDigits);
+        passwordOtpRefs.current[index - 1]?.focus();
+      } else {
+        const newDigits = [...passwordOtpDigits];
+        newDigits[index] = '';
+        setPasswordOtpDigits(newDigits);
+      }
+    } else if (e.key === 'ArrowLeft' && index > 0) {
+      passwordOtpRefs.current[index - 1]?.focus();
+    } else if (e.key === 'ArrowRight' && index < 5) {
+      passwordOtpRefs.current[index + 1]?.focus();
+    }
+  };
+
+  const handlePasswordOtpPaste = (e: React.ClipboardEvent<HTMLInputElement>) => {
+    e.preventDefault();
+    const pasted = e.clipboardData.getData('text').replace(/\D/g, '').slice(0, 6);
+    if (!pasted) return;
+    const newDigits = ['', '', '', '', '', ''];
+    pasted.split('').forEach((char, i) => {
+      newDigits[i] = char;
+    });
+    setPasswordOtpDigits(newDigits);
+    const nextIdx = Math.min(pasted.length, 5);
+    passwordOtpRefs.current[nextIdx]?.focus();
+  };
+
+  const handleRequestPasswordOtp = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setPasswordError('');
+    setPasswordSuccess('');
+
+    if (!currentPassword || !newPassword || !confirmPassword) {
+      setPasswordError('Please fill in current password, new password, and confirmation.');
+      return;
+    }
+
+    if (newPassword.length < 6) {
+      setPasswordError('New password must be at least 6 characters long.');
+      return;
+    }
+
+    if (newPassword !== confirmPassword) {
+      setPasswordError('New password and confirmation do not match.');
+      return;
+    }
+
+    const userString = localStorage.getItem('orbit_user');
+    if (!userString) return;
+    const parsed = JSON.parse(userString);
+    const token = parsed.token;
+
+    setPasswordLoading(true);
+
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/console/password/request-otp`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`,
+        },
+        body: JSON.stringify({ currentPassword, newPassword }),
+      });
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        throw new Error(data.error || 'Failed to request security verification code.');
+      }
+
+      setShowPasswordOtpModal(true);
+      setPasswordResendCooldown(60);
+      setPasswordLoading(false);
+    } catch (err: any) {
+      setPasswordError(err.message || 'Server communication error.');
+      setPasswordLoading(false);
+    }
+  };
+
+  const handleVerifyAndChangePassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setPasswordOtpError('');
+
+    const code = passwordOtpDigits.join('');
+    if (!code || code.length !== 6) {
+      setPasswordOtpError('Please enter the complete 6-digit confirmation code.');
+      return;
+    }
+
+    const userString = localStorage.getItem('orbit_user');
+    if (!userString) return;
+    const parsed = JSON.parse(userString);
+    const token = parsed.token;
+
+    setPasswordOtpLoading(true);
+
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/console/password/verify-and-update`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`,
+        },
+        body: JSON.stringify({ code, currentPassword, newPassword }),
+      });
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        throw new Error(data.error || 'Password update verification failed.');
+      }
+
+      setShowPasswordOtpModal(false);
+      setPasswordOtpLoading(false);
+      setCurrentPassword('');
+      setNewPassword('');
+      setConfirmPassword('');
+      setPasswordSuccess('Password successfully updated! Your account security credentials have been refreshed.');
+    } catch (err: any) {
+      setPasswordOtpError(err.message || 'Failed to verify code.');
+      setPasswordOtpLoading(false);
+    }
+  };
+
+  const handleResendPasswordOtp = async () => {
+    if (passwordResendCooldown > 0) return;
+    setPasswordOtpError('');
+    setPasswordResendMessage('');
+
+    const userString = localStorage.getItem('orbit_user');
+    if (!userString) return;
+    const parsed = JSON.parse(userString);
+    const token = parsed.token;
+
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/console/password/request-otp`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`,
+        },
+        body: JSON.stringify({ currentPassword, newPassword }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || 'Failed to resend code.');
+      }
+      setPasswordResendMessage('A fresh confirmation code was sent to your email!');
+      setPasswordResendCooldown(60);
+    } catch (err: any) {
+      setPasswordOtpError(err.message || 'Failed to resend code.');
+    }
+  };
 
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -463,7 +687,6 @@ function ConsoleContent() {
           body: JSON.stringify({
             displayName: updatedName,
             avatarUrl: updatedAvatar,
-            newPassword: newPassword.trim(),
           }),
         });
       } catch (fetchErr) {
@@ -477,7 +700,6 @@ function ConsoleContent() {
           body: JSON.stringify({
             displayName: updatedName,
             avatarUrl: updatedAvatar,
-            newPassword: newPassword.trim(),
           }),
         });
       }
@@ -493,7 +715,6 @@ function ConsoleContent() {
 
       setDisplayName(updatedName);
       setAvatarUrl(updatedAvatar);
-      setNewPassword('');
 
       // Persist to localStorage & dispatch storage event
       parsed.displayName = updatedName;
@@ -1053,15 +1274,12 @@ function ConsoleContent() {
                   </div>
                 </div>
 
-                {/* Main Settings Form */}
-                <form onSubmit={handleProfileSave} style={{ display: 'flex', flexDirection: 'column', gap: '30px' }}>
-
-                  {/* Unified Card 1: Account Personalization */}
-                  <div style={{ background: 'rgba(10, 8, 8, 0.75)', border: '1px solid rgba(255, 255, 255, 0.06)', borderRadius: '14px', padding: '28px', display: 'flex', flexDirection: 'column', gap: '24px' }}>
-                    <div style={{ borderBottom: '1px solid rgba(255,255,255,0.05)', paddingBottom: '16px' }}>
-                      <h4 style={{ fontSize: '1.1rem', color: '#fff', fontWeight: 800, fontFamily: 'var(--font-orbitron)', margin: 0 }}>Account Personalization</h4>
-                      <p style={{ color: '#808085', fontSize: '0.8rem', margin: '4px 0 0 0' }}>Manage your display identity, registered email, profile picture, and cartoon avatar.</p>
-                    </div>
+                {/* Card 1: Account Personalization Form */}
+                <form onSubmit={handleProfileSave} style={{ background: 'rgba(10, 8, 8, 0.75)', border: '1px solid rgba(255, 255, 255, 0.06)', borderRadius: '14px', padding: '28px', display: 'flex', flexDirection: 'column', gap: '24px' }}>
+                  <div style={{ borderBottom: '1px solid rgba(255,255,255,0.05)', paddingBottom: '16px' }}>
+                    <h4 style={{ fontSize: '1.1rem', color: '#fff', fontWeight: 800, fontFamily: 'var(--font-orbitron)', margin: 0 }}>Account Personalization</h4>
+                    <p style={{ color: '#808085', fontSize: '0.8rem', margin: '4px 0 0 0' }}>Manage your display identity, registered email, profile picture, and cartoon avatar.</p>
+                  </div>
 
                     {/* Section A: Display Name & Email Inputs */}
                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '22px' }}>
@@ -1258,34 +1476,119 @@ function ConsoleContent() {
                     >
                       Save Personalization Settings
                     </button>
-                  </div>
+                  </form>
 
-                  {/* Card 3: Dedicated Password Change Card */}
-                  <div style={{ background: 'rgba(10, 8, 8, 0.75)', border: '1px solid rgba(255, 255, 255, 0.06)', borderRadius: '14px', padding: '28px', display: 'flex', flexDirection: 'column', gap: '18px' }}>
-                    <div style={{ borderBottom: '1px solid rgba(255,255,255,0.05)', paddingBottom: '14px' }}>
-                      <h4 style={{ fontSize: '1.1rem', color: '#fff', fontWeight: 800, fontFamily: 'var(--font-orbitron)', margin: 0 }}>Password & Credentials</h4>
-                      <p style={{ color: '#808085', fontSize: '0.8rem', margin: '4px 0 0 0' }}>Update your account login password safely.</p>
+                  {/* Card 3: Dedicated Password Change Card with OTP Security */}
+                  <form onSubmit={handleRequestPasswordOtp} style={{ background: 'rgba(10, 8, 8, 0.75)', border: '1px solid rgba(255, 255, 255, 0.06)', borderRadius: '14px', padding: '28px', display: 'flex', flexDirection: 'column', gap: '18px' }}>
+                    <div style={{ borderBottom: '1px solid rgba(255,255,255,0.05)', paddingBottom: '14px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px' }}>
+                      <div>
+                        <h4 style={{ fontSize: '1.1rem', color: '#fff', fontWeight: 800, fontFamily: 'var(--font-orbitron)', margin: 0 }}>Password & Credentials</h4>
+                        <p style={{ color: '#808085', fontSize: '0.8rem', margin: '4px 0 0 0' }}>Update your account login password with 2-step email OTP verification.</p>
+                      </div>
+                      <span style={{ fontSize: '0.72rem', color: 'var(--accent-red)', fontWeight: 700, padding: '4px 10px', background: 'rgba(255, 0, 60, 0.08)', borderRadius: '6px', border: '1px solid rgba(255, 0, 60, 0.2)' }}>
+                        🔒 OTP Protected
+                      </span>
                     </div>
 
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', maxWidth: '500px' }}>
-                      <label style={{ color: '#a0a0a5', fontSize: '0.8rem', fontWeight: 600 }}>New Password</label>
-                      <input
-                        type="password"
-                        placeholder="Leave blank to keep your current password"
-                        value={newPassword}
-                        onChange={(e) => setNewPassword(e.target.value)}
-                        style={{
-                          background: '#060404',
-                          border: '1px solid rgba(255,255,255,0.08)',
-                          borderRadius: '8px',
-                          padding: '12px 16px',
-                          color: '#fff',
-                          fontSize: '0.88rem',
-                          outline: 'none',
-                        }}
-                      />
+                    {passwordSuccess && (
+                      <div style={{ background: 'rgba(0, 230, 118, 0.1)', border: '1px solid rgba(0, 230, 118, 0.3)', borderRadius: '8px', padding: '12px 16px', color: '#00e676', fontSize: '0.85rem' }}>
+                        ✓ {passwordSuccess}
+                      </div>
+                    )}
+
+                    {passwordError && (
+                      <div style={{ background: 'rgba(255, 76, 117, 0.08)', border: '1px solid rgba(255, 76, 117, 0.2)', borderRadius: '8px', padding: '12px 16px', color: '#ff4c75', fontSize: '0.85rem' }}>
+                        ⚠️ {passwordError}
+                      </div>
+                    )}
+
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '16px' }}>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                        <label style={{ color: '#a0a0a5', fontSize: '0.8rem', fontWeight: 600 }}>Current Password</label>
+                        <input
+                          required
+                          type="password"
+                          placeholder="Enter current password"
+                          value={currentPassword}
+                          onChange={(e) => setCurrentPassword(e.target.value)}
+                          style={{
+                            background: '#060404',
+                            border: '1px solid rgba(255,255,255,0.08)',
+                            borderRadius: '8px',
+                            padding: '12px 16px',
+                            color: '#fff',
+                            fontSize: '0.88rem',
+                            outline: 'none',
+                          }}
+                        />
+                      </div>
+
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                        <label style={{ color: '#a0a0a5', fontSize: '0.8rem', fontWeight: 600 }}>New Password</label>
+                        <input
+                          required
+                          type="password"
+                          placeholder="Min 6 characters"
+                          value={newPassword}
+                          onChange={(e) => setNewPassword(e.target.value)}
+                          style={{
+                            background: '#060404',
+                            border: '1px solid rgba(255,255,255,0.08)',
+                            borderRadius: '8px',
+                            padding: '12px 16px',
+                            color: '#fff',
+                            fontSize: '0.88rem',
+                            outline: 'none',
+                          }}
+                        />
+                      </div>
+
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                        <label style={{ color: '#a0a0a5', fontSize: '0.8rem', fontWeight: 600 }}>Confirm New Password</label>
+                        <input
+                          required
+                          type="password"
+                          placeholder="Re-type new password"
+                          value={confirmPassword}
+                          onChange={(e) => setConfirmPassword(e.target.value)}
+                          style={{
+                            background: '#060404',
+                            border: '1px solid rgba(255,255,255,0.08)',
+                            borderRadius: '8px',
+                            padding: '12px 16px',
+                            color: '#fff',
+                            fontSize: '0.88rem',
+                            outline: 'none',
+                          }}
+                        />
+                      </div>
                     </div>
-                  </div>
+
+                    <button
+                      type="submit"
+                      disabled={passwordLoading}
+                      className="glow-btn"
+                      style={{
+                        background: 'var(--accent-red)',
+                        border: 'none',
+                        color: '#fff',
+                        padding: '12px 24px',
+                        borderRadius: '8px',
+                        fontSize: '0.82rem',
+                        fontWeight: 700,
+                        cursor: passwordLoading ? 'not-allowed' : 'pointer',
+                        fontFamily: 'var(--font-orbitron)',
+                        alignSelf: 'start',
+                        marginTop: '5px',
+                        boxShadow: '0 4px 15px var(--accent-red-glow)',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '8px',
+                      }}
+                    >
+                      {passwordLoading ? 'Sending Security Code...' : 'Request Security OTP & Update Password'}
+                    </button>
+                  </form>
 
                   {/* Card 4: Dedicated 2-Factor Authentication (2FA) Card */}
                   <div style={{ background: 'rgba(10, 8, 8, 0.75)', border: '1px solid rgba(255, 255, 255, 0.06)', borderRadius: '14px', padding: '28px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '20px' }}>
@@ -1316,27 +1619,6 @@ function ConsoleContent() {
                       </button>
                     </div>
                   </div>
-
-                  <button
-                    type="submit"
-                    className="glow-btn"
-                    style={{
-                      background: 'var(--accent-red)',
-                      border: 'none',
-                      color: '#fff',
-                      padding: '14px 28px',
-                      borderRadius: '8px',
-                      fontSize: '0.85rem',
-                      fontWeight: 700,
-                      cursor: 'pointer',
-                      fontFamily: 'var(--font-orbitron)',
-                      alignSelf: 'start',
-                      boxShadow: '0 4px 15px var(--accent-red-glow)',
-                    }}
-                  >
-                    Save Security Profile
-                  </button>
-                </form>
 
                 {/* Card 5: Danger Zone */}
                 <div style={{ background: 'rgba(255, 0, 60, 0.03)', border: '1px solid rgba(255, 0, 60, 0.15)', borderRadius: '14px', padding: '24px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '15px' }}>
@@ -1439,7 +1721,142 @@ function ConsoleContent() {
           </div>
         )}
 
+        {/* PASSWORD OTP CONFIRMATION MODAL */}
+        {showPasswordOtpModal && (
+          <div style={{ position: 'fixed', top: 0, left: 0, width: '100%', height: '100%', background: 'rgba(0,0,0,0.85)', backdropFilter: 'blur(8px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: '20px' }}>
+            <div style={{ background: '#0a0808', border: '1.5px solid var(--accent-red)', borderRadius: '16px', width: '100%', maxWidth: '440px', padding: '40px 30px', boxShadow: '0 0 30px rgba(255, 0, 60, 0.25)', position: 'relative' }}>
+              
+              <button onClick={() => setShowPasswordOtpModal(false)} style={{ position: 'absolute', top: '20px', right: '20px', background: 'transparent', border: 'none', color: '#606065', fontSize: '1.2rem', cursor: 'pointer' }}>×</button>
 
+              <div style={{ marginBottom: '25px', textAlign: 'center' }}>
+                <span style={{ fontSize: '0.75rem', fontWeight: 900, color: 'var(--accent-red)', letterSpacing: '1px', textTransform: 'uppercase' }}>
+                  🔒 Security Verification
+                </span>
+                <h3 style={{ fontSize: '1.4rem', color: '#fff', fontWeight: 800, margin: '5px 0 0 0', fontFamily: 'var(--font-orbitron)' }}>
+                  Confirm Password Change
+                </h3>
+                <p style={{ color: '#808085', fontSize: '0.85rem', margin: '8px 0 0 0', lineHeight: 1.4 }}>
+                  We dispatched a 6-digit confirmation code to your email. Enter the code to authorize this password change.
+                </p>
+              </div>
+
+              {passwordResendMessage && (
+                <div style={{ background: 'rgba(0, 230, 118, 0.1)', border: '1px solid rgba(0, 230, 118, 0.3)', borderRadius: '8px', padding: '10px 14px', color: '#00e676', fontSize: '0.8rem', marginBottom: '15px' }}>
+                  ✓ {passwordResendMessage}
+                </div>
+              )}
+
+              {passwordOtpError && (
+                <div style={{ background: 'rgba(255, 76, 117, 0.08)', border: '1px solid rgba(255, 76, 117, 0.2)', borderRadius: '8px', padding: '10px 14px', color: '#ff4c75', fontSize: '0.8rem', marginBottom: '20px' }}>
+                  ⚠️ {passwordOtpError}
+                </div>
+              )}
+
+              <form onSubmit={handleVerifyAndChangePassword} style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                  <label style={{ color: '#a0a0a5', fontSize: '0.75rem', fontWeight: 600, letterSpacing: '0.5px', textAlign: 'center' }}>
+                    ENTER 6-DIGIT CODE
+                  </label>
+                  
+                  {/* 6 Segmented OTP Boxes */}
+                  <div style={{ display: 'flex', gap: '8px', justifyContent: 'center' }}>
+                    {passwordOtpDigits.map((digit, idx) => (
+                      <input
+                        key={idx}
+                        ref={(el) => { passwordOtpRefs.current[idx] = el; }}
+                        type="text"
+                        inputMode="numeric"
+                        maxLength={idx === 0 ? 6 : 1}
+                        value={digit}
+                        onChange={(e) => handlePasswordOtpChange(idx, e.target.value)}
+                        onKeyDown={(e) => handlePasswordOtpKeyDown(idx, e)}
+                        onPaste={handlePasswordOtpPaste}
+                        style={{
+                          width: '48px',
+                          height: '56px',
+                          background: digit ? '#0f0a0b' : '#060404',
+                          border: digit ? '1.5px solid var(--accent-red)' : '1px solid rgba(255, 255, 255, 0.12)',
+                          borderRadius: '10px',
+                          color: '#fff',
+                          fontSize: '1.4rem',
+                          fontWeight: 800,
+                          textAlign: 'center',
+                          fontFamily: 'var(--font-orbitron), monospace',
+                          outline: 'none',
+                          transition: 'all 0.2s cubic-bezier(0.16, 1, 0.3, 1)',
+                          boxShadow: digit ? '0 0 14px rgba(255, 0, 60, 0.3), inset 0 0 8px rgba(255, 0, 60, 0.15)' : 'none',
+                        }}
+                        onFocus={(e) => {
+                          e.currentTarget.style.borderColor = 'var(--accent-red)';
+                          e.currentTarget.style.boxShadow = '0 0 16px rgba(255, 0, 60, 0.45)';
+                          e.currentTarget.style.transform = 'translateY(-2px)';
+                        }}
+                        onBlur={(e) => {
+                          if (!digit) {
+                            e.currentTarget.style.borderColor = 'rgba(255, 255, 255, 0.12)';
+                            e.currentTarget.style.boxShadow = 'none';
+                          }
+                          e.currentTarget.style.transform = 'translateY(0px)';
+                        }}
+                      />
+                    ))}
+                  </div>
+                </div>
+
+                <button
+                  type="submit"
+                  disabled={passwordOtpLoading}
+                  className="glow-btn"
+                  style={{
+                    width: '100%',
+                    background: 'var(--accent-red)',
+                    border: 'none',
+                    color: '#fff',
+                    padding: '12px',
+                    borderRadius: '6px',
+                    fontSize: '0.85rem',
+                    fontWeight: 700,
+                    cursor: passwordOtpLoading ? 'not-allowed' : 'pointer',
+                    fontFamily: 'var(--font-orbitron)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: '10px',
+                    marginTop: '10px',
+                  }}
+                >
+                  {passwordOtpLoading ? (
+                    <>
+                      <div style={{ width: '16px', height: '16px', border: '2px solid rgba(255,255,255,0.15)', borderTopColor: '#fff', borderRadius: '50%', animation: 'spin-slow 0.8s linear infinite' }} />
+                      Authorizing Password Update...
+                    </>
+                  ) : 'Confirm & Update Password'}
+                </button>
+
+                <div style={{ marginTop: '10px', textAlign: 'center', fontSize: '0.8rem', color: '#808085' }}>
+                  Didn't receive the email?{' '}
+                  <button
+                    type="button"
+                    onClick={handleResendPasswordOtp}
+                    disabled={passwordResendCooldown > 0}
+                    style={{
+                      background: 'none',
+                      border: 'none',
+                      color: passwordResendCooldown > 0 ? '#606065' : 'var(--accent-red)',
+                      fontWeight: 600,
+                      cursor: passwordResendCooldown > 0 ? 'not-allowed' : 'pointer',
+                      padding: 0,
+                      textDecoration: 'underline',
+                      fontSize: '0.8rem',
+                    }}
+                  >
+                    {passwordResendCooldown > 0 ? `Resend code in ${passwordResendCooldown}s` : 'Resend code'}
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
 
     </main>
   );
