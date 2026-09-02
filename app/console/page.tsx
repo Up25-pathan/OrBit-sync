@@ -965,6 +965,7 @@ function ConsoleContent() {
                             <th style={{ padding: '12px 10px' }}>Billing Date</th>
                             <th style={{ padding: '12px 10px' }}>Charge Amount</th>
                             <th style={{ padding: '12px 10px' }}>Payment Status</th>
+                            <th style={{ padding: '12px 10px', textAlign: 'right' }}>Receipt</th>
                           </tr>
                         </thead>
                         <tbody>
@@ -977,6 +978,14 @@ function ConsoleContent() {
                                 <span style={{ color: inv.status === 'PAID' ? '#00e676' : '#ff4c75', fontSize: '0.75rem', fontWeight: 'bold' }}>
                                   ● {inv.status}
                                 </span>
+                              </td>
+                              <td style={{ padding: '12px 10px', textAlign: 'right' }}>
+                                <button
+                                  onClick={() => window.open(`/console/invoice/${inv.id}`, '_blank')}
+                                  style={{ background: 'rgba(255, 0, 60, 0.08)', border: '1px solid rgba(255,0,60,0.3)', color: '#ff859f', padding: '4px 10px', borderRadius: '4px', cursor: 'pointer', fontSize: '0.75rem' }}
+                                >
+                                  Download PDF
+                                </button>
                               </td>
                             </tr>
                           ))}

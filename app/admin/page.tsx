@@ -120,6 +120,7 @@ function AdminContent() {
   const router = useRouter();
   const [activeTab, setActiveTab] = useState<'overview' | 'users' | 'licenses' | 'devices' | 'tickets' | 'releases' | 'control-server'>('overview');
   const [isClient, setIsClient] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [isAdmin, setIsAdmin] = useState(false);
   const [authError, setAuthError] = useState('');
   const [bootstrapKeyInput, setBootstrapKeyInput] = useState('');
@@ -341,7 +342,11 @@ function AdminContent() {
 
   const fetchAdminData = async () => {
     const token = getAuthToken();
-    if (!token) return;
+    if (!token) {
+      setAuthError('Unauthorized administrative session. Please login.');
+      setLoading(false);
+      return;
+    }
 
     try {
       // Check admin status via /me profile
@@ -395,6 +400,8 @@ function AdminContent() {
     } catch (err) {
       console.error('Error fetching admin data:', err);
       setAuthError('Failed to connect to OrBit Administration API.');
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -636,10 +643,10 @@ function AdminContent() {
     (u) => u.email.toLowerCase().includes(searchQuery.toLowerCase()) || u.displayName.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
-  if (!isClient) {
+  if (!isClient || loading) {
     return (
       <main style={{ minHeight: '100vh', background: '#030303', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-        <p style={{ color: '#a0a0a5', fontSize: '1.2rem', fontFamily: 'monospace' }}>Initializing Admin Console...</p>
+        <p style={{ color: '#a0a0a5', fontSize: '1.2rem', fontFamily: 'monospace' }}>Verifying Admin Session...</p>
       </main>
     );
   }

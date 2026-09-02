@@ -26,6 +26,39 @@ function SignupContent() {
   const [verificationCode, setVerificationCode] = useState('');
   const [verifyLoading, setVerifyLoading] = useState(false);
   const [verifyError, setVerifyError] = useState('');
+  const [resendCooldown, setResendCooldown] = useState(0);
+  const [resendMessage, setResendMessage] = useState('');
+
+  React.useEffect(() => {
+    if (resendCooldown <= 0) return;
+    const timer = setInterval(() => {
+      setResendCooldown((prev) => prev - 1);
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [resendCooldown]);
+
+  const handleResendCode = async () => {
+    if (resendCooldown > 0 || !verifyEmail) return;
+    setVerifyError('');
+    setResendMessage('');
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/auth/resend-code`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ email: verifyEmail }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || 'Failed to resend code.');
+      }
+      setResendMessage('A fresh verification code was sent to your email!');
+      setResendCooldown(60);
+    } catch (err: any) {
+      setVerifyError(err.message || 'Failed to resend code.');
+    }
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -66,6 +99,7 @@ function SignupContent() {
       if (data.status === 'PENDING_VERIFICATION') {
         setVerifyEmail(email);
         setShowVerifyModal(true);
+        setResendCooldown(60);
         setLoading(false);
       }
     } catch (err: any) {
@@ -385,9 +419,15 @@ function SignupContent() {
                 Verify Registration Code
               </h3>
               <p style={{ color: '#808085', fontSize: '0.85rem', margin: '8px 0 0 0', lineHeight: 1.4 }}>
-                We have dispatched a 6-digit confirmation key to <strong>{verifyEmail}</strong>. (For testing, check your server console log!)
+                We have dispatched a 6-digit confirmation code to <strong>{verifyEmail}</strong>. Check your inbox (or spam folder).
               </p>
             </div>
+
+            {resendMessage && (
+              <div style={{ background: 'rgba(0, 230, 118, 0.1)', border: '1px solid rgba(0, 230, 118, 0.3)', borderRadius: '8px', padding: '10px 14px', color: '#00e676', fontSize: '0.8rem', marginBottom: '15px' }}>
+                ✓ {resendMessage}
+              </div>
+            )}
 
             {verifyError && (
               <div style={{ background: 'rgba(255, 76, 117, 0.08)', border: '1px solid rgba(255, 76, 117, 0.2)', borderRadius: '8px', padding: '10px 14px', color: '#ff4c75', fontSize: '0.8rem', marginBottom: '20px' }}>
@@ -449,6 +489,27 @@ function SignupContent() {
                   </>
                 ) : 'Complete Signup Handshake'}
               </button>
+
+              <div style={{ marginTop: '10px', textAlign: 'center', fontSize: '0.8rem', color: '#808085' }}>
+                Didn't receive the email?{' '}
+                <button
+                  type="button"
+                  onClick={handleResendCode}
+                  disabled={resendCooldown > 0}
+                  style={{
+                    background: 'none',
+                    border: 'none',
+                    color: resendCooldown > 0 ? '#606065' : 'var(--accent-red)',
+                    fontWeight: 600,
+                    cursor: resendCooldown > 0 ? 'not-allowed' : 'pointer',
+                    padding: 0,
+                    textDecoration: 'underline',
+                    fontSize: '0.8rem',
+                  }}
+                >
+                  {resendCooldown > 0 ? `Resend code in ${resendCooldown}s` : 'Resend code'}
+                </button>
+              </div>
             </form>
           </div>
         </div>

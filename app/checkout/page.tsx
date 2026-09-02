@@ -183,6 +183,7 @@ function CheckoutContent() {
       }
 
       setLocaleInfo({ countryCode: code, currency: cur, symbol: sym });
+      setGateway('razorpay');
     };
 
     detectLocale();
@@ -395,7 +396,8 @@ function CheckoutContent() {
       const amountSubunits = isZeroDecimal ? Math.round(totalAmount) : Math.round(totalAmount * 100);
 
       const options = {
-        key: data.isSandbox ? 'rzp_test_3c2e1a90d8e7c5' : data.keyId,
+        key: data.keyId,
+        order_id: data.orderId,
         amount: amountSubunits,
         currency: currencyCode === 'INR' ? 'INR' : 'USD', // Razorpay standard INR or international routing
         name: "OrBit Platform",
@@ -406,39 +408,33 @@ function CheckoutContent() {
         theme: {
           color: "#ff003c",
         },
-      };
+        handler: async function (response: any) {
+          setProcessing(true);
+          try {
+            const verifyRes = await fetch(`${API_BASE_URL}/api/billing/razorpay/verify`, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${token}`,
+              },
+              body: JSON.stringify({
+                razorpay_payment_id: response.razorpay_payment_id,
+                razorpay_order_id: response.razorpay_order_id,
+                razorpay_signature: response.razorpay_signature,
+                planTier: planParam,
+              }),
+            });
 
-      if (!data.isSandbox) {
-        (options as any).order_id = data.orderId;
-      }
-
-      (options as any).handler = async function (response: any) {
-        setProcessing(true);
-        try {
-          const verifyRes = await fetch(`${API_BASE_URL}/api/billing/razorpay/verify`, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'Authorization': `Bearer ${token}`,
-            },
-            body: JSON.stringify({
-              razorpay_payment_id: response.razorpay_payment_id || 'pay_mock_id',
-              razorpay_order_id: response.razorpay_order_id || data.orderId,
-              razorpay_signature: response.razorpay_signature || 'sig_mock_signature',
-              planTier: planParam,
-              isSandbox: data.isSandbox,
-            }),
-          });
-
-          if (verifyRes.ok) {
-            router.push('/console?checkout_success=true&gateway=razorpay');
-          } else {
-            alert('Razorpay payment signature verify failed.');
+            if (verifyRes.ok) {
+              router.push('/console?checkout_success=true&gateway=razorpay');
+            } else {
+              alert('Razorpay payment signature verify failed.');
+              setProcessing(false);
+            }
+          } catch (err) {
+            alert('Signature verification timed out.');
             setProcessing(false);
           }
-        } catch (err) {
-          alert('Signature verification timed out.');
-          setProcessing(false);
         }
       };
 
@@ -521,7 +517,8 @@ function CheckoutContent() {
               </h3>
               
               {/* Payment selector tabs */}
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '10px', background: '#070505', padding: '6px', borderRadius: '10px', border: '1px solid rgba(255,255,255,0.05)' }}>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '10px', background: '#070505', padding: '6px', borderRadius: '10px', border: '1px solid rgba(255,255,255,0.05)' }}>
+                {/* Stripe and PayPal are temporarily disabled until configured in production
                 <button
                   onClick={() => setGateway('stripe')}
                   style={{
@@ -564,6 +561,7 @@ function CheckoutContent() {
                   <PayPalIcon active={gateway === 'paypal'} />
                   <span>PayPal</span>
                 </button>
+                */}
                 <button
                   onClick={() => setGateway('razorpay')}
                   style={{
@@ -572,7 +570,7 @@ function CheckoutContent() {
                     color: gateway === 'razorpay' ? '#fff' : '#808085',
                     padding: '12px 10px',
                     borderRadius: '8px',
-                    fontSize: '0.8rem',
+                    fontSize: '0.85rem',
                     fontWeight: 'bold',
                     cursor: 'pointer',
                     transition: 'all 0.2s',
@@ -583,7 +581,7 @@ function CheckoutContent() {
                   }}
                 >
                   <UpiIcon active={gateway === 'razorpay'} />
-                  <span>UPI / Netbanking</span>
+                  <span>UPI / Cards / Netbanking (Razorpay Secure Checkout)</span>
                 </button>
               </div>
             </div>
