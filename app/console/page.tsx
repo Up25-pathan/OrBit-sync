@@ -100,6 +100,7 @@ function ConsoleContent() {
   const [profileEmail, setProfileEmail] = useState('');
   const [userRole, setUserRole] = useState<'USER' | 'ADMIN'>('USER');
   const [twoFactor, setTwoFactor] = useState(false);
+  const [twoFactorLoading, setTwoFactorLoading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Dedicated Password Change & Security OTP States
@@ -327,6 +328,39 @@ function ConsoleContent() {
     }
   };
 
+  const handleToggleTwoFactor = async () => {
+    const userString = localStorage.getItem('orbit_user');
+    if (!userString) return;
+    const parsed = JSON.parse(userString);
+    const token = parsed.token;
+
+    const nextState = !twoFactor;
+    setTwoFactorLoading(true);
+
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/console/2fa/toggle`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`,
+        },
+        body: JSON.stringify({ enabled: nextState }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || 'Failed to update 2FA settings.');
+      }
+
+      setTwoFactor(data.twoFactorEnabled);
+      alert(data.message || (nextState ? '2FA enabled successfully!' : '2FA disabled.'));
+    } catch (err: any) {
+      alert(err.message || 'Failed to toggle 2FA.');
+    } finally {
+      setTwoFactorLoading(false);
+    }
+  };
+
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -427,6 +461,10 @@ function ConsoleContent() {
           if (data.user?.avatarUrl) {
             fetchedAvatar = data.user.avatarUrl;
             setAvatarUrl(fetchedAvatar);
+          }
+
+          if (data.user?.twoFactorEnabled !== undefined) {
+            setTwoFactor(Boolean(data.user.twoFactorEnabled));
           }
 
           // Sync fetched user profile parameters to localStorage cache
@@ -1594,25 +1632,27 @@ function ConsoleContent() {
                   <div style={{ background: 'rgba(10, 8, 8, 0.75)', border: '1px solid rgba(255, 255, 255, 0.06)', borderRadius: '14px', padding: '28px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '20px' }}>
                     <div>
                       <h4 style={{ fontSize: '1.1rem', color: '#fff', fontWeight: 800, fontFamily: 'var(--font-orbitron)', margin: 0 }}>Two-Factor Authentication (2FA)</h4>
-                      <p style={{ color: '#808085', fontSize: '0.82rem', margin: '4px 0 0 0' }}>Protect your account with TOTP authenticator app verification code on login.</p>
+                      <p style={{ color: '#808085', fontSize: '0.82rem', margin: '4px 0 0 0' }}>Require a 6-digit cryptographic security code sent to your email on every sign-in.</p>
                     </div>
 
                     <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
                       <span style={{ fontSize: '0.82rem', color: twoFactor ? '#00e676' : '#808085', fontWeight: 700 }}>
-                        {twoFactor ? '● 2FA Enabled' : '○ 2FA Disabled'}
+                        {twoFactorLoading ? 'Updating...' : (twoFactor ? '● 2FA Enabled' : '○ 2FA Disabled')}
                       </span>
                       <button
                         type="button"
-                        onClick={() => setTwoFactor(!twoFactor)}
+                        disabled={twoFactorLoading}
+                        onClick={handleToggleTwoFactor}
                         style={{
                           width: '46px',
                           height: '26px',
                           borderRadius: '15px',
                           background: twoFactor ? 'var(--accent-red)' : '#1e1a1a',
                           border: '1px solid transparent',
-                          cursor: 'pointer',
+                          cursor: twoFactorLoading ? 'not-allowed' : 'pointer',
                           position: 'relative',
                           transition: 'background 0.2s',
+                          opacity: twoFactorLoading ? 0.6 : 1,
                         }}
                       >
                         <div style={{ width: '20px', height: '20px', borderRadius: '50%', background: '#fff', position: 'absolute', top: '2px', left: twoFactor ? '23px' : '3px', transition: 'left 0.2s' }} />

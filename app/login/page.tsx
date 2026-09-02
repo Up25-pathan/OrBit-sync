@@ -21,6 +21,7 @@ function LoginContent() {
 
   // Verification Code Modal States
   const [showVerifyModal, setShowVerifyModal] = useState(false);
+  const [isTwoFactor, setIsTwoFactor] = useState(false);
   const [verifyEmail, setVerifyEmail] = useState('');
   const [otpDigits, setOtpDigits] = useState<string[]>(['', '', '', '', '', '']);
   const inputRefs = useRef<(HTMLInputElement | null)[]>([]);
@@ -160,9 +161,20 @@ function LoginContent() {
 
       const data = await res.json();
 
+      // Catch Two-Factor Authentication Challenge
+      if (res.ok && data.status === 'REQUIRES_2FA') {
+        setIsTwoFactor(true);
+        setVerifyEmail(email);
+        setShowVerifyModal(true);
+        setResendCooldown(60);
+        setLoading(false);
+        return;
+      }
+
       if (!res.ok) {
-        // Catch pending verification
+        // Catch pending unverified registration
         if (res.status === 403 && data.status === 'PENDING_VERIFICATION') {
+          setIsTwoFactor(false);
           setVerifyEmail(email);
           setShowVerifyModal(true);
           setResendCooldown(60);
@@ -471,13 +483,15 @@ function LoginContent() {
 
             <div style={{ marginBottom: '25px', textAlign: 'center' }}>
               <span style={{ fontSize: '0.75rem', fontWeight: 900, color: 'var(--accent-red)', letterSpacing: '1px', textTransform: 'uppercase' }}>
-                ✉️ Email Verification Required
+                {isTwoFactor ? '🔒 Two-Factor Authentication' : '✉️ Email Verification Required'}
               </span>
               <h3 style={{ fontSize: '1.4rem', color: '#fff', fontWeight: 800, margin: '5px 0 0 0', fontFamily: 'var(--font-orbitron)' }}>
-                Verify Registration Code
+                {isTwoFactor ? 'Enter 2FA Security Code' : 'Verify Registration Code'}
               </h3>
               <p style={{ color: '#808085', fontSize: '0.85rem', margin: '8px 0 0 0', lineHeight: 1.4 }}>
-                This account registration is pending verification. Please enter the 6-digit verification code sent to <strong>{verifyEmail}</strong>. Check your inbox (or spam folder).
+                {isTwoFactor
+                  ? <>A 2-step security verification code was dispatched to <strong>{verifyEmail}</strong>. Enter it below to sign in.</>
+                  : <>This account registration is pending verification. Please enter the 6-digit verification code sent to <strong>{verifyEmail}</strong>.</>}
               </p>
             </div>
 
