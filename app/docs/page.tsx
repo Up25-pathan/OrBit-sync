@@ -13,7 +13,7 @@ const DOCS_CONTENT = {
       {
         title: 'System Architecture Concept',
         body: 'OrBit splits collaboration into two distinct planes:\n\n1. Local Data Plane: All code diffs, snapshot calculations, and file transfers execute locally using Rust and direct P2P mesh networking.\n2. Central Control Plane: A lightweight Go server manages identity verification, friend requests, presence heartbeats, and encrypted dead-drop relays for offline peers.',
-        code: '// Default Ports & Endpoints\nLocal Daemon P2P Port: 65337\nWebSocket Bridge: ws://127.0.0.1:65337/ws\nWeb Server: https://orbit-sync.onrender.com\nControl Server: https://orbit-server-ymao.onrender.com',
+        code: '// Default Ports & Endpoints\nLocal Daemon P2P Port: 65337\nWebSocket Bridge: ws://127.0.0.1:65337/ws\nWeb Server: https://orbit-sync.onrender.com\nControl Server: https://orbit-server-xbr5.onrender.com',
       },
       {
         title: 'System Requirements',
@@ -51,7 +51,7 @@ const DOCS_CONTENT = {
       {
         title: '3. Encrypted Cloud Relay Fallback (full_push)',
         body: 'If target peers are offline during push:\n1. The daemon detects zero connected online peers.\n2. Uploads E2EE encrypted delta blob to Control Server Dead-Drop Vault (POST /api/v1/projects/{id}/push).\n3. When offline peers reconnect, their client queries GET /api/v1/projects/{id}/pull to download and apply pending deltas.',
-        code: '// Dead-Drop Vault API\nPOST https://orbit-server-ymao.onrender.com/api/v1/projects/:id/push\nGET  https://orbit-server-ymao.onrender.com/api/v1/projects/:id/pull',
+        code: '// Dead-Drop Vault API\nPOST https://orbit-server-xbr5.onrender.com/api/v1/projects/:id/push\nGET  https://orbit-server-xbr5.onrender.com/api/v1/projects/:id/pull',
       },
     ],
   },

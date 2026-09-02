@@ -139,7 +139,7 @@ function AdminContent() {
   const [controlServer, setControlServer] = useState<ControlServerMetrics | null>(null);
   const [isCsLoading, setIsCsLoading] = useState(true);
   const [isSweeping, setIsSweeping] = useState(false);
-  const [csTargetUrl, setCsTargetUrl] = useState(process.env.NEXT_PUBLIC_CONTROL_SERVER_URL || 'https://orbit-server-ymao.onrender.com');
+  const [csTargetUrl, setCsTargetUrl] = useState(process.env.NEXT_PUBLIC_CONTROL_SERVER_URL || 'https://orbit-server-xbr5.onrender.com');
 
   // Tier Override Modal state
   const [editingUser, setEditingUser] = useState<UserRecord | null>(null);
