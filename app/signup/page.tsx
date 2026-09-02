@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, Suspense } from 'react';
+import React, { useState, useRef, useEffect, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import TiltCard from '@/components/effects/TiltCard';
@@ -23,19 +23,93 @@ function SignupContent() {
   // Verification Code Modal States
   const [showVerifyModal, setShowVerifyModal] = useState(false);
   const [verifyEmail, setVerifyEmail] = useState('');
-  const [verificationCode, setVerificationCode] = useState('');
+  const [otpDigits, setOtpDigits] = useState<string[]>(['', '', '', '', '', '']);
+  const inputRefs = useRef<(HTMLInputElement | null)[]>([]);
   const [verifyLoading, setVerifyLoading] = useState(false);
   const [verifyError, setVerifyError] = useState('');
   const [resendCooldown, setResendCooldown] = useState(0);
   const [resendMessage, setResendMessage] = useState('');
 
-  React.useEffect(() => {
+  useEffect(() => {
     if (resendCooldown <= 0) return;
     const timer = setInterval(() => {
       setResendCooldown((prev) => prev - 1);
     }, 1000);
     return () => clearInterval(timer);
   }, [resendCooldown]);
+
+  useEffect(() => {
+    if (showVerifyModal) {
+      setOtpDigits(['', '', '', '', '', '']);
+      setTimeout(() => {
+        inputRefs.current[0]?.focus();
+      }, 150);
+    }
+  }, [showVerifyModal]);
+
+  const handleOtpChange = (index: number, val: string) => {
+    const sanitized = val.replace(/\D/g, '');
+    if (!sanitized) {
+      const newDigits = [...otpDigits];
+      newDigits[index] = '';
+      setOtpDigits(newDigits);
+      return;
+    }
+
+    if (sanitized.length > 1) {
+      const newDigits = [...otpDigits];
+      const chars = sanitized.slice(0, 6).split('');
+      chars.forEach((char, i) => {
+        if (index + i < 6) {
+          newDigits[index + i] = char;
+        }
+      });
+      setOtpDigits(newDigits);
+      const nextIndex = Math.min(index + chars.length, 5);
+      inputRefs.current[nextIndex]?.focus();
+      return;
+    }
+
+    const newDigits = [...otpDigits];
+    newDigits[index] = sanitized[0];
+    setOtpDigits(newDigits);
+
+    if (index < 5 && sanitized[0]) {
+      inputRefs.current[index + 1]?.focus();
+    }
+  };
+
+  const handleOtpKeyDown = (index: number, e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Backspace') {
+      if (!otpDigits[index] && index > 0) {
+        const newDigits = [...otpDigits];
+        newDigits[index - 1] = '';
+        setOtpDigits(newDigits);
+        inputRefs.current[index - 1]?.focus();
+      } else {
+        const newDigits = [...otpDigits];
+        newDigits[index] = '';
+        setOtpDigits(newDigits);
+      }
+    } else if (e.key === 'ArrowLeft' && index > 0) {
+      inputRefs.current[index - 1]?.focus();
+    } else if (e.key === 'ArrowRight' && index < 5) {
+      inputRefs.current[index + 1]?.focus();
+    }
+  };
+
+  const handleOtpPaste = (e: React.ClipboardEvent<HTMLInputElement>) => {
+    e.preventDefault();
+    const pasted = e.clipboardData.getData('text').replace(/\D/g, '').slice(0, 6);
+    if (!pasted) return;
+    const newDigits = ['', '', '', '', '', ''];
+    pasted.split('').forEach((char, i) => {
+      newDigits[i] = char;
+    });
+    setOtpDigits(newDigits);
+    const nextIdx = Math.min(pasted.length, 5);
+    inputRefs.current[nextIdx]?.focus();
+  };
 
   const handleResendCode = async () => {
     if (resendCooldown > 0 || !verifyEmail) return;
@@ -111,13 +185,14 @@ function SignupContent() {
   const handleVerifyCodeSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setVerifyError('');
-    setVerifyLoading(true);
 
-    if (!verificationCode || verificationCode.length !== 6) {
-      setVerifyError('Please enter a valid 6-digit code.');
-      setVerifyLoading(false);
+    const code = otpDigits.join('');
+    if (!code || code.length !== 6) {
+      setVerifyError('Please enter the complete 6-digit verification code.');
       return;
     }
+
+    setVerifyLoading(true);
 
     try {
       const res = await fetch(`${API_BASE_URL}/api/auth/verify-code`, {
@@ -125,7 +200,7 @@ function SignupContent() {
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ email: verifyEmail, code: verificationCode }),
+        body: JSON.stringify({ email: verifyEmail, code }),
       });
 
       const data = await res.json();
@@ -435,29 +510,55 @@ function SignupContent() {
               </div>
             )}
 
-            <form onSubmit={handleVerifyCodeSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '15px' }}>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                <label style={{ color: '#a0a0a5', fontSize: '0.75rem', fontWeight: 600 }}>Verification Code</label>
-                <input
-                  required
-                  type="text"
-                  maxLength={6}
-                  placeholder="123456"
-                  value={verificationCode}
-                  onChange={(e) => setVerificationCode(e.target.value.replace(/\D/g, ''))}
-                  style={{
-                    background: '#030202',
-                    border: '1px solid rgba(255, 255, 255, 0.08)',
-                    borderRadius: '6px',
-                    padding: '12px 14px',
-                    color: '#fff',
-                    fontSize: '1.1rem',
-                    outline: 'none',
-                    textAlign: 'center',
-                    letterSpacing: '6px',
-                    fontFamily: 'monospace',
-                  }}
-                />
+            <form onSubmit={handleVerifyCodeSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                <label style={{ color: '#a0a0a5', fontSize: '0.75rem', fontWeight: 600, letterSpacing: '0.5px', textAlign: 'center' }}>
+                  ENTER 6-DIGIT CODE
+                </label>
+                
+                {/* 6 Segmented OTP Boxes */}
+                <div style={{ display: 'flex', gap: '8px', justifyContent: 'center' }}>
+                  {otpDigits.map((digit, idx) => (
+                    <input
+                      key={idx}
+                      ref={(el) => { inputRefs.current[idx] = el; }}
+                      type="text"
+                      inputMode="numeric"
+                      maxLength={idx === 0 ? 6 : 1}
+                      value={digit}
+                      onChange={(e) => handleOtpChange(idx, e.target.value)}
+                      onKeyDown={(e) => handleOtpKeyDown(idx, e)}
+                      onPaste={handleOtpPaste}
+                      style={{
+                        width: '48px',
+                        height: '56px',
+                        background: digit ? '#0f0a0b' : '#060404',
+                        border: digit ? '1.5px solid var(--accent-red)' : '1px solid rgba(255, 255, 255, 0.12)',
+                        borderRadius: '10px',
+                        color: '#fff',
+                        fontSize: '1.4rem',
+                        fontWeight: 800,
+                        textAlign: 'center',
+                        fontFamily: 'var(--font-orbitron), monospace',
+                        outline: 'none',
+                        transition: 'all 0.2s cubic-bezier(0.16, 1, 0.3, 1)',
+                        boxShadow: digit ? '0 0 14px rgba(255, 0, 60, 0.3), inset 0 0 8px rgba(255, 0, 60, 0.15)' : 'none',
+                      }}
+                      onFocus={(e) => {
+                        e.currentTarget.style.borderColor = 'var(--accent-red)';
+                        e.currentTarget.style.boxShadow = '0 0 16px rgba(255, 0, 60, 0.45)';
+                        e.currentTarget.style.transform = 'translateY(-2px)';
+                      }}
+                      onBlur={(e) => {
+                        if (!digit) {
+                          e.currentTarget.style.borderColor = 'rgba(255, 255, 255, 0.12)';
+                          e.currentTarget.style.boxShadow = 'none';
+                        }
+                        e.currentTarget.style.transform = 'translateY(0px)';
+                      }}
+                    />
+                  ))}
+                </div>
               </div>
 
               <button
