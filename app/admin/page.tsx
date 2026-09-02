@@ -448,10 +448,18 @@ function AdminContent() {
             status: 'ONLINE',
             pingMs: latency,
             uptimeSeconds: raw.uptimeSeconds || 0,
-            goVersion: raw.goVersion || 'go1.22.5',
+            goVersion: raw.goVersion || 'go1.27.0',
             goroutines: raw.goroutines || 0,
             memory: raw.memory || { allocMb: 0, sysMb: 0, heapAllocMb: 0 },
-            database: raw.database || { engine: 'Local JSON DB', connected: true, activeUsersCount: 0, onlineUsersCount: 0, projectsCount: 0 },
+            database: {
+              engine: raw.database?.engine || 'Local JSON DB',
+              connected: raw.database?.connected ?? true,
+              activeUsersCount: raw.database?.usersCount ?? raw.database?.activeUsersCount ?? 0,
+              onlineUsersCount: raw.database?.onlineUsersCount ?? 0,
+              projectsCount: raw.database?.projectsCount ?? 0,
+              pgConfigured: raw.database?.pgConfigured ?? false,
+              pgError: raw.database?.pgError || '',
+            },
             storage: raw.storage || { deltaBlobsCount: 0, deltaSizeBytes: 0, webrtcSignalsCount: 0 },
             lastChecked: new Date().toLocaleTimeString()
           };
