@@ -122,14 +122,18 @@ router.post('/razorpay/verify', authenticateJWT, async (req: AuthRequest, res: R
       return res.status(401).json({ error: 'Unauthorized.' });
     }
 
-    // Cryptographic signature check
+    // Cryptographic signature check (constant-time comparison)
     const payload = `${razorpay_order_id}|${razorpay_payment_id}`;
     const generatedSignature = crypto
       .createHmac('sha256', razorpayKeySecret)
       .update(payload)
       .digest('hex');
 
-    if (generatedSignature !== razorpay_signature) {
+    const sigBuf = Buffer.from(generatedSignature, 'utf8');
+    const userSigBuf = Buffer.from(razorpay_signature || '', 'utf8');
+    const isSignatureValid = sigBuf.length === userSigBuf.length && crypto.timingSafeEqual(sigBuf, userSigBuf);
+
+    if (!isSignatureValid) {
       return res.status(400).json({ error: 'Signature verification mismatch.' });
     }
 
