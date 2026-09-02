@@ -441,34 +441,16 @@ router.get('/github', (req: Request, res: Response) => {
 
 // GET /api/auth/google/callback
 router.get('/google/callback', async (req: Request, res: Response) => {
+  const clientUrl = resolveClientUrl(req);
   try {
     const code = req.query.code as string;
-    const clientUrl = resolveClientUrl(req);
 
-    // 1. Sandbox Google login simulation
-    if (!process.env.GOOGLE_CLIENT_ID || !code) {
-      console.log(`[Google OAuth Sandbox] Mocking login for developer...`);
-      const mockEmail = 'google-developer@orbit.dev';
-
-      let user = await prisma.user.findUnique({ where: { email: mockEmail }, include: { license: true, subscription: true } });
-
-      if (!user) {
-        // Create verified Google user directly
-        user = await prisma.$transaction(async (tx: any) => {
-          const u = await tx.user.create({
-            data: { email: mockEmail, passwordHash: 'oauth_dummy_hash_2026', isVerified: true },
-          });
-          await provisionUserDefaultResources(tx, u.id);
-          return tx.user.findUnique({ where: { id: u.id }, include: { license: true, subscription: true } });
-        }) as any;
-      }
-
-      const token = signToken({ id: user!.id, email: user!.email });
-      return redirectWithSession(res, clientUrl, token, user!.email, user!.role);
+    if (!process.env.GOOGLE_CLIENT_ID || !process.env.GOOGLE_CLIENT_SECRET || !code) {
+      console.warn('[Google OAuth] Missing client credentials or authorization code.');
+      return res.redirect(`${clientUrl}/login?error=Google authentication configuration missing.`);
     }
 
-    // 2. Real Google OAuth
-    // Fetch google tokens
+    // Real Google OAuth - Fetch google tokens
     const tokenRes = await fetch('https://oauth2.googleapis.com/token', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -482,6 +464,11 @@ router.get('/google/callback', async (req: Request, res: Response) => {
     });
     const tokens = (await tokenRes.json()) as any;
 
+    if (!tokens.access_token) {
+      console.error('[Google OAuth Error] Token exchange failed:', tokens);
+      return res.redirect(`${clientUrl}/login?error=Google authentication token exchange failed.`);
+    }
+
     // Fetch user details from Google
     const profileRes = await fetch('https://www.googleapis.com/oauth2/v2/userinfo', {
       headers: { Authorization: `Bearer ${tokens.access_token}` },
@@ -489,12 +476,22 @@ router.get('/google/callback', async (req: Request, res: Response) => {
     const profile = (await profileRes.json()) as any;
     const email = profile.email;
 
+    if (!email) {
+      return res.redirect(`${clientUrl}/login?error=Could not retrieve email from Google profile.`);
+    }
+
     let user = await prisma.user.findUnique({ where: { email }, include: { license: true, subscription: true } });
 
     if (!user) {
       user = await prisma.$transaction(async (tx: any) => {
         const u = await tx.user.create({
-          data: { email, passwordHash: crypto.randomBytes(16).toString('hex'), isVerified: true },
+          data: { 
+            email, 
+            displayName: profile.name || email.split('@')[0],
+            avatarUrl: profile.picture || null,
+            passwordHash: crypto.randomBytes(16).toString('hex'), 
+            isVerified: true 
+          },
         });
         await provisionUserDefaultResources(tx, u.id);
         return tx.user.findUnique({ where: { id: u.id }, include: { license: true, subscription: true } });
@@ -506,40 +503,22 @@ router.get('/google/callback', async (req: Request, res: Response) => {
 
   } catch (error: any) {
     console.error('Google OAuth callback error:', error);
-    const clientUrl = resolveClientUrl(req);
     return res.redirect(`${clientUrl}/login?error=Google OAuth failed`);
   }
 });
 
 // GET /api/auth/github/callback
 router.get('/github/callback', async (req: Request, res: Response) => {
+  const clientUrl = resolveClientUrl(req);
   try {
     const code = req.query.code as string;
-    const clientUrl = resolveClientUrl(req);
 
-    // 1. Sandbox GitHub login simulation
-    if (!process.env.GITHUB_CLIENT_ID || !code) {
-      console.log(`[GitHub OAuth Sandbox] Mocking login for developer...`);
-      const mockEmail = 'github-developer@orbit.dev';
-
-      let user = await prisma.user.findUnique({ where: { email: mockEmail }, include: { license: true, subscription: true } });
-
-      if (!user) {
-        user = await prisma.$transaction(async (tx: any) => {
-          const u = await tx.user.create({
-            data: { email: mockEmail, passwordHash: 'oauth_dummy_hash_2026', isVerified: true },
-          });
-          await provisionUserDefaultResources(tx, u.id);
-          return tx.user.findUnique({ where: { id: u.id }, include: { license: true, subscription: true } });
-        }) as any;
-      }
-
-      const token = signToken({ id: user!.id, email: user!.email });
-      return redirectWithSession(res, clientUrl, token, user!.email, user!.role);
+    if (!process.env.GITHUB_CLIENT_ID || !process.env.GITHUB_CLIENT_SECRET || !code) {
+      console.warn('[GitHub OAuth] Missing client credentials or authorization code.');
+      return res.redirect(`${clientUrl}/login?error=GitHub authentication configuration missing.`);
     }
 
-    // 2. Real GitHub OAuth
-    // Fetch GitHub access token
+    // Real GitHub OAuth - Fetch GitHub access token
     const tokenRes = await fetch('https://github.com/login/oauth/access_token', {
       method: 'POST',
       headers: {
@@ -554,6 +533,11 @@ router.get('/github/callback', async (req: Request, res: Response) => {
       }),
     });
     const tokens = (await tokenRes.json()) as any;
+
+    if (!tokens.access_token) {
+      console.error('[GitHub OAuth Error] Token exchange failed:', tokens);
+      return res.redirect(`${clientUrl}/login?error=GitHub token exchange failed.`);
+    }
 
     // Fetch user profile from GitHub
     const userRes = await fetch('https://api.github.com/user', {
@@ -588,7 +572,13 @@ router.get('/github/callback', async (req: Request, res: Response) => {
     if (!user) {
       user = await prisma.$transaction(async (tx: any) => {
         const u = await tx.user.create({
-          data: { email: primaryEmail, passwordHash: crypto.randomBytes(16).toString('hex'), isVerified: true },
+          data: { 
+            email: primaryEmail, 
+            displayName: userProfile.name || userProfile.login || primaryEmail.split('@')[0],
+            avatarUrl: userProfile.avatar_url || null,
+            passwordHash: crypto.randomBytes(16).toString('hex'), 
+            isVerified: true 
+          },
         });
         await provisionUserDefaultResources(tx, u.id);
         return tx.user.findUnique({ where: { id: u.id }, include: { license: true, subscription: true } });
@@ -600,7 +590,6 @@ router.get('/github/callback', async (req: Request, res: Response) => {
 
   } catch (error: any) {
     console.error('GitHub OAuth callback error:', error);
-    const clientUrl = resolveClientUrl(req);
     return res.redirect(`${clientUrl}/login?error=GitHub OAuth failed`);
   }
 });
