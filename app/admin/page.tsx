@@ -134,7 +134,7 @@ function AdminContent() {
   const [tickets, setTickets] = useState<TicketRecord[]>([]);
   const [releases, setReleases] = useState<ReleaseRecord[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
-  
+
   // Go Control Server Telemetry State
   const [controlServer, setControlServer] = useState<ControlServerMetrics | null>(null);
   const [isCsLoading, setIsCsLoading] = useState(true);
@@ -426,18 +426,24 @@ function AdminContent() {
           };
         }
       }
-    } catch (e) {}
+    } catch (e) { }
 
     // 2. Fallback to direct client-side fetch (handles cases where Node API is on Render cloud but Control Server is local)
     if (!liveData) {
       try {
         const directStart = Date.now();
-        const directRes = await fetch(`${csTargetUrl}/api/v1/system/status`, {
+        let directRes = await fetch(`${csTargetUrl}/api/v1/system/status`, {
           headers: { 'Accept': 'application/json' },
         });
+        if (!directRes.ok) {
+          directRes = await fetch(`${csTargetUrl}/api/v1/health`, {
+            headers: { 'Accept': 'application/json' },
+          });
+        }
         const latency = Date.now() - directStart;
         if (directRes.ok) {
-          const raw = await directRes.json();
+          let raw: any = {};
+          try { raw = await directRes.json(); } catch (e) { raw = { status: 'ONLINE' }; }
           liveData = {
             status: 'ONLINE',
             pingMs: latency,
@@ -450,7 +456,7 @@ function AdminContent() {
             lastChecked: new Date().toLocaleTimeString()
           };
         }
-      } catch (err) {}
+      } catch (err) { }
     }
 
     if (liveData) {
@@ -801,7 +807,7 @@ function AdminContent() {
               {/* TAB 1: SYSTEM OVERVIEW */}
               {activeTab === 'overview' && stats && (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '30px' }}>
-                  
+
                   {/* Stats Cards Grid */}
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '20px' }}>
                     <TiltCard style={{ background: 'rgba(10, 8, 8, 0.7)', border: '1px solid rgba(255, 255, 255, 0.05)', borderRadius: '12px', padding: '22px' }}>
@@ -828,7 +834,7 @@ function AdminContent() {
                   {/* Tier Distribution breakdown */}
                   <div style={{ background: 'rgba(10, 8, 8, 0.7)', border: '1px solid rgba(255, 255, 255, 0.05)', borderRadius: '12px', padding: '30px' }}>
                     <h3 style={{ fontSize: '1.2rem', color: '#fff', fontWeight: 'bold', fontFamily: 'var(--font-orbitron)', marginBottom: '20px' }}>Subscription Tier Distribution</h3>
-                    
+
                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '20px' }}>
                       <div style={{ background: 'rgba(255,255,255,0.02)', padding: '20px', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.04)' }}>
                         <span style={{ fontSize: '0.8rem', color: '#a0a0a5' }}>Community Free</span>
@@ -1313,7 +1319,7 @@ function AdminContent() {
 
                       {/* 4 Metric Cards */}
                       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '18px', marginBottom: '30px' }}>
-                        
+
                         {/* Card 1: Server Uptime & CPU */}
                         <div style={{ background: 'rgba(12, 10, 10, 0.7)', border: '1px solid rgba(255,255,255,0.06)', borderRadius: '10px', padding: '18px' }}>
                           <span style={{ fontSize: '0.75rem', color: '#808085', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '1px' }}>Uptime & Goroutines</span>
@@ -1362,7 +1368,7 @@ function AdminContent() {
 
                       {/* Detailed Telemetry Panels Grid */}
                       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
-                        
+
                         {/* Database & User Telemetry */}
                         <div style={{ background: 'rgba(12, 10, 10, 0.7)', border: '1px solid rgba(255,255,255,0.06)', borderRadius: '10px', padding: '22px' }}>
                           <h4 style={{ fontSize: '1rem', color: '#fff', margin: '0 0 16px 0', fontFamily: 'var(--font-orbitron)', display: 'flex', alignItems: 'center', gap: '8px' }}>
@@ -1575,7 +1581,7 @@ function AdminContent() {
                 Mark as Mandatory Security Patch / Required Update
               </label>
             </div>
-                    {/* Platform Download Payload Fields */}
+            {/* Platform Download Payload Fields */}
             <div style={{ borderTop: '1px solid rgba(255,255,255,0.08)', paddingTop: '15px', marginBottom: '20px' }}>
               <h4 style={{ fontSize: '0.9rem', color: 'var(--accent-red)', margin: '0 0 12px 0', fontFamily: 'var(--font-orbitron)' }}>
                 Upload Binary Files or Specify Payload URLs & Cryptographic Signatures
