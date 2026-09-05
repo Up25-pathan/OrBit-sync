@@ -1,8 +1,9 @@
 // OrBit Security - Centralized Resend Email Dispatcher
+const DEFAULT_SENDER = 'OrBit Security <security@orbit-sync.dev>';
 
 export const sendVerificationEmail = async (targetEmail: string, verificationCode: string) => {
   const resendApiKey = process.env.RESEND_API_KEY || '';
-  const senderFrom = process.env.RESEND_FROM_EMAIL || 'OrBit Security <onboarding@resend.dev>';
+  const senderFrom = process.env.RESEND_FROM_EMAIL || DEFAULT_SENDER;
 
   const subject = `Your OrBit Security Code: ${verificationCode}`;
   const htmlContent = `
@@ -107,7 +108,7 @@ export const sendVerificationEmail = async (targetEmail: string, verificationCod
 
 export const sendPasswordChangeOtpEmail = async (targetEmail: string, verificationCode: string) => {
   const resendApiKey = process.env.RESEND_API_KEY || '';
-  const senderFrom = process.env.RESEND_FROM_EMAIL || 'OrBit Security <onboarding@resend.dev>';
+  const senderFrom = process.env.RESEND_FROM_EMAIL || DEFAULT_SENDER;
 
   const subject = `Security Alert: OrBit Password Change Code: ${verificationCode}`;
   const htmlContent = `
@@ -217,7 +218,7 @@ export const sendPasswordChangeOtpEmail = async (targetEmail: string, verificati
 
 export const sendTwoFactorOtpEmail = async (targetEmail: string, verificationCode: string) => {
   const resendApiKey = process.env.RESEND_API_KEY || '';
-  const senderFrom = process.env.RESEND_FROM_EMAIL || 'OrBit Security <onboarding@resend.dev>';
+  const senderFrom = process.env.RESEND_FROM_EMAIL || DEFAULT_SENDER;
 
   const subject = `Your 2FA Login Security Code: ${verificationCode}`;
   const htmlContent = `
