@@ -36,6 +36,10 @@ const allowedOrigins = [
   'http://localhost:3000',
   'http://localhost:5173',
   'http://localhost:9090',
+  'https://orbit-sync.dev',
+  'https://www.orbit-sync.dev',
+  'https://api.orbit-sync.dev',
+  'https://relay.orbit-sync.dev',
   'https://orbit-sync.onrender.com',
   'https://orbitcollab-three.vercel.app',
   'https://orbit-server-xbr5.onrender.com',
@@ -45,40 +49,48 @@ const allowedOrigins = [
 
 // Helper to check if an origin is permitted
 function isOriginAllowed(origin: string): boolean {
+  if (!origin) return true;
   if (allowedOrigins.includes(origin)) return true;
   if (origin.startsWith('http://localhost:') || origin.startsWith('http://127.0.0.1:')) return true;
 
   try {
     const url = new URL(origin);
+    const host = url.hostname.toLowerCase();
+    // Allow custom production domain and all subdomains (orbit-sync.dev, www.orbit-sync.dev, api.orbit-sync.dev, etc.)
+    if (host === 'orbit-sync.dev' || host.endsWith('.orbit-sync.dev')) return true;
     // Allow all Vercel deployments (previews, production, branches)
-    if (url.hostname.endsWith('.vercel.app')) return true;
+    if (host.endsWith('.vercel.app')) return true;
     // Allow all Render services within the ecosystem
-    if (url.hostname.endsWith('.onrender.com')) return true;
+    if (host.endsWith('.onrender.com')) return true;
   } catch {
-    // Malformed origin string
-    return false;
+    // String matching fallback
+    if (origin.includes('orbit-sync.dev') || origin.includes('vercel.app') || origin.includes('onrender.com')) {
+      return true;
+    }
   }
 
   return false;
 }
 
-// Enable CORS for client connections & Control Server verifications
-app.use(cors({
+const corsOptions: cors.CorsOptions = {
   origin: (origin, callback) => {
     // Allow requests with no origin (e.g. mobile apps, curl, server-to-server, desktop apps)
     if (!origin || isOriginAllowed(origin)) {
       callback(null, true);
     } else {
       console.warn(`[CORS Blocked] Origin not allowed: ${origin}`);
-      // Passing `null, false` cleanly denies CORS to browser without triggering unhandled 500 error in Express
       callback(null, false);
     }
   },
   credentials: true,
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Control-Server-Secret'],
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-}));
-app.options('*', cors());
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Control-Server-Secret', 'Accept'],
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  optionsSuccessStatus: 200,
+};
+
+// Enable CORS for client connections & Control Server verifications
+app.use(cors(corsOptions));
+app.options('*', cors(corsOptions));
 
 // Route Stripe Webhook directly to parse raw request buffers (Stripe SDK signature checks require this)
 // For all other routes, parse JSON bodies (supporting larger payloads like base64 avatars)

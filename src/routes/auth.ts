@@ -37,9 +37,13 @@ const ALLOWED_ORIGINS = [
   process.env.FRONTEND_URL,
   'http://localhost:3000',
   'http://localhost:9090',
+  'https://orbit-sync.dev',
+  'https://www.orbit-sync.dev',
+  'https://api.orbit-sync.dev',
+  'https://relay.orbit-sync.dev',
   'https://orbit-sync.onrender.com',
   'https://orbitcollab-three.vercel.app',
-  'https://orbit-server-ymao.onrender.com',
+  'https://orbit-server-xbr5.onrender.com',
 ].filter((x): x is string => !!x);
 
 const resolveClientUrl = (req: Request): string => {

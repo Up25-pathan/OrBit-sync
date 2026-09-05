@@ -224,7 +224,7 @@ router.get('/stats', async (req: Request, res: Response) => {
     let proCount = 0;
     let enterpriseCount = 0;
 
-    subscriptions.forEach((sub) => {
+    subscriptions.forEach((sub: any) => {
       const tier = normalizeTier(sub.planTier);
       if (tier === 'pro') proCount++;
       else if (tier === 'enterprise') enterpriseCount++;
@@ -280,7 +280,7 @@ router.get('/users', async (req: Request, res: Response) => {
       orderBy: { createdAt: 'desc' },
     });
 
-    const formattedUsers = users.map((u) => ({
+    const formattedUsers = users.map((u: any) => ({
       id: u.id,
       email: u.email,
       displayName: u.displayName || u.email.split('@')[0],
@@ -401,7 +401,7 @@ router.get('/licenses', async (req: Request, res: Response) => {
       orderBy: { createdAt: 'desc' },
     });
 
-    const result = licenses.map((l) => ({
+    const result = licenses.map((l: any) => ({
       id: l.id,
       licenseKey: l.licenseKey,
       maxDevices: l.maxDevices,
@@ -437,7 +437,7 @@ router.get('/devices', async (req: Request, res: Response) => {
       orderBy: { lastSeen: 'desc' },
     });
 
-    const result = devices.map((d) => ({
+    const result = devices.map((d: any) => ({
       id: d.id,
       deviceId: d.deviceId,
       hostname: d.hostname || 'unknown-peer',
