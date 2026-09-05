@@ -555,12 +555,12 @@ router.get('/google/callback', async (req: Request, res: Response) => {
     if (!user) {
       user = await prisma.$transaction(async (tx: any) => {
         const u = await tx.user.create({
-          data: { 
-            email, 
+          data: {
+            email,
             displayName: profile.name || email.split('@')[0],
             avatarUrl: profile.picture || null,
-            passwordHash: crypto.randomBytes(16).toString('hex'), 
-            isVerified: true 
+            passwordHash: crypto.randomBytes(16).toString('hex'),
+            isVerified: true
           },
         });
         await provisionUserDefaultResources(tx, u.id);
@@ -642,12 +642,12 @@ router.get('/github/callback', async (req: Request, res: Response) => {
     if (!user) {
       user = await prisma.$transaction(async (tx: any) => {
         const u = await tx.user.create({
-          data: { 
-            email: primaryEmail, 
+          data: {
+            email: primaryEmail,
             displayName: userProfile.name || userProfile.login || primaryEmail.split('@')[0],
             avatarUrl: userProfile.avatar_url || null,
-            passwordHash: crypto.randomBytes(16).toString('hex'), 
-            isVerified: true 
+            passwordHash: crypto.randomBytes(16).toString('hex'),
+            isVerified: true
           },
         });
         await provisionUserDefaultResources(tx, u.id);
