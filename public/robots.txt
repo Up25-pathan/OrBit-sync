@@ -1,0 +1,23 @@
+User-agent: *
+Allow: /
+Allow: /download
+Allow: /docs
+Allow: /pricing
+Allow: /security
+Allow: /about
+Allow: /status
+Allow: /telemetry
+Allow: /contact
+Allow: /privacy
+Allow: /terms
+Disallow: /console/
+Disallow: /console/*
+Disallow: /admin/
+Disallow: /admin/*
+Disallow: /checkout/
+Disallow: /checkout/*
+Disallow: /api/
+Disallow: /api/*
+
+Sitemap: https://www.orbit-sync.dev/sitemap.xml
+Host: https://www.orbit-sync.dev
