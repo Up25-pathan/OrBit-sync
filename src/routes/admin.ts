@@ -754,4 +754,208 @@ router.post('/control-server/sweep', requireAdmin, async (req: AdminAuthRequest,
   }
 });
 
+// -------------------------------------------------------------
+// TELEMETRY, CRASH DUMPS & SERVER ERRORS (ADMIN ENDPOINTS)
+// -------------------------------------------------------------
+
+// GET /api/v1/admin/telemetry/crashes
+router.get('/telemetry/crashes', requireAdmin, async (req: AdminAuthRequest, res: Response) => {
+  try {
+    const { status, source, limit = '50', page = '1' } = req.query;
+    const take = Math.min(Math.max(parseInt(limit as string, 10) || 50, 1), 100);
+    const skip = Math.max((parseInt(page as string, 10) - 1) * take, 0);
+
+    const where: any = {};
+    if (status && status !== 'ALL') {
+      where.status = status;
+    }
+    if (source && source !== 'ALL') {
+      where.source = source;
+    }
+
+    const [crashes, total, unresolved] = await Promise.all([
+      (prisma as any).crashReport.findMany({
+        where,
+        orderBy: { timestamp: 'desc' },
+        take,
+        skip,
+      }),
+      (prisma as any).crashReport.count({ where }),
+      (prisma as any).crashReport.count({ where: { status: 'UNRESOLVED' } }),
+    ]);
+
+    return res.status(200).json({
+      crashes,
+      pagination: {
+        total,
+        unresolved,
+        page: parseInt(page as string, 10) || 1,
+        pages: Math.ceil(total / take) || 1,
+      },
+    });
+  } catch (err: any) {
+    console.error('[Admin] Failed to fetch crash reports:', err);
+    return res.status(500).json({ error: 'Failed to fetch crash reports.' });
+  }
+});
+
+// PATCH /api/v1/admin/telemetry/crashes/:id
+router.patch('/telemetry/crashes/:id', requireAdmin, async (req: AdminAuthRequest, res: Response) => {
+  try {
+    const { id } = req.params;
+    const { status } = req.body;
+
+    if (!status) {
+      return res.status(400).json({ error: 'Status is required.' });
+    }
+
+    const updated = await (prisma as any).crashReport.update({
+      where: { id },
+      data: { status },
+    });
+
+    return res.status(200).json({ success: true, crash: updated });
+  } catch (err: any) {
+    console.error('[Admin] Failed to update crash status:', err);
+    return res.status(500).json({ error: 'Failed to update crash status.' });
+  }
+});
+
+// DELETE /api/v1/admin/telemetry/crashes/:id
+router.delete('/telemetry/crashes/:id', requireAdmin, async (req: AdminAuthRequest, res: Response) => {
+  try {
+    const { id } = req.params;
+    await (prisma as any).crashReport.delete({ where: { id } });
+    return res.status(200).json({ success: true, message: 'Crash report deleted.' });
+  } catch (err: any) {
+    console.error('[Admin] Failed to delete crash report:', err);
+    return res.status(500).json({ error: 'Failed to delete crash report.' });
+  }
+});
+
+// GET /api/v1/admin/telemetry/server-errors
+router.get('/telemetry/server-errors', requireAdmin, async (req: AdminAuthRequest, res: Response) => {
+  try {
+    const { status = 'ALL', limit = '50' } = req.query;
+    const take = Math.min(parseInt(limit as string, 10) || 50, 100);
+
+    const where: any = {};
+    if (status !== 'ALL') {
+      where.status = status;
+    }
+
+    const [events, total] = await Promise.all([
+      (prisma as any).serverErrorEvent.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+        take,
+      }),
+      (prisma as any).serverErrorEvent.count({ where }),
+    ]);
+
+    return res.status(200).json({ events, total });
+  } catch (err: any) {
+    console.error('[Admin] Failed to fetch server errors:', err);
+    return res.status(500).json({ error: 'Failed to fetch server error events.' });
+  }
+});
+
+// PATCH /api/v1/admin/telemetry/server-errors/:id
+router.patch('/telemetry/server-errors/:id', requireAdmin, async (req: AdminAuthRequest, res: Response) => {
+  try {
+    const { id } = req.params;
+    const { status } = req.body;
+    const updated = await (prisma as any).serverErrorEvent.update({
+      where: { id },
+      data: { status },
+    });
+    return res.status(200).json({ success: true, event: updated });
+  } catch (err: any) {
+    return res.status(500).json({ error: 'Failed to update server error event.' });
+  }
+});
+
+// -------------------------------------------------------------
+// FEEDBACK & BUG REPORTS (ADMIN ENDPOINTS)
+// -------------------------------------------------------------
+
+// GET /api/v1/admin/feedback
+router.get('/feedback', requireAdmin, async (req: AdminAuthRequest, res: Response) => {
+  try {
+    const { category, status, severity, limit = '50', page = '1' } = req.query;
+    const take = Math.min(Math.max(parseInt(limit as string, 10) || 50, 1), 100);
+    const skip = Math.max((parseInt(page as string, 10) - 1) * take, 0);
+
+    const where: any = {};
+    if (category && category !== 'ALL') {
+      where.category = category;
+    }
+    if (status && status !== 'ALL') {
+      where.status = status;
+    }
+    if (severity && severity !== 'ALL') {
+      where.severity = severity;
+    }
+
+    const [tickets, total, openCount] = await Promise.all([
+      (prisma as any).feedbackTicket.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+        take,
+        skip,
+      }),
+      (prisma as any).feedbackTicket.count({ where }),
+      (prisma as any).feedbackTicket.count({ where: { status: 'OPEN' } }),
+    ]);
+
+    return res.status(200).json({
+      tickets,
+      pagination: {
+        total,
+        openCount,
+        page: parseInt(page as string, 10) || 1,
+        pages: Math.ceil(total / take) || 1,
+      },
+    });
+  } catch (err: any) {
+    console.error('[Admin] Failed to fetch feedback tickets:', err);
+    return res.status(500).json({ error: 'Failed to fetch feedback tickets.' });
+  }
+});
+
+// PATCH /api/v1/admin/feedback/:id
+router.patch('/feedback/:id', requireAdmin, async (req: AdminAuthRequest, res: Response) => {
+  try {
+    const { id } = req.params;
+    const { status } = req.body;
+
+    if (!status) {
+      return res.status(400).json({ error: 'Status is required.' });
+    }
+
+    const updated = await (prisma as any).feedbackTicket.update({
+      where: { id },
+      data: { status },
+    });
+
+    return res.status(200).json({ success: true, ticket: updated });
+  } catch (err: any) {
+    console.error('[Admin] Failed to update feedback ticket:', err);
+    return res.status(500).json({ error: 'Failed to update feedback ticket.' });
+  }
+});
+
+// DELETE /api/v1/admin/feedback/:id
+router.delete('/feedback/:id', requireAdmin, async (req: AdminAuthRequest, res: Response) => {
+  try {
+    const { id } = req.params;
+    await (prisma as any).feedbackTicket.delete({ where: { id } });
+    return res.status(200).json({ success: true, message: 'Feedback ticket deleted.' });
+  } catch (err: any) {
+    console.error('[Admin] Failed to delete feedback ticket:', err);
+    return res.status(500).json({ error: 'Failed to delete feedback ticket.' });
+  }
+});
+
 export default router;
+

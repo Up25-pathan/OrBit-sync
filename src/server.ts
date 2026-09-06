@@ -9,6 +9,7 @@ import licenseRouter from './routes/license';
 import billingRouter from './routes/billing';
 import adminRouter from './routes/admin';
 import updaterRouter from './routes/updater';
+import telemetryRouter from './routes/telemetry';
 import { prisma } from './db';
 
 // Force DNS resolver to prefer IPv4 over IPv6 (fixes Render ENETUNREACH socket connect errors)
@@ -123,6 +124,11 @@ app.use('/api/v1/admin', adminRouter);
 app.use('/api/updater', updaterRouter);
 app.use('/api/v1/updater', updaterRouter);
 
+app.use('/api/telemetry', telemetryRouter);
+app.use('/api/v1/telemetry', telemetryRouter);
+app.use('/api/feedback', telemetryRouter);
+app.use('/api/v1/feedback', telemetryRouter);
+
 // Health check endpoint
 app.get('/health', (req, res) => {
   res.status(200).json({ status: 'OK', timestamp: new Date() });
@@ -149,6 +155,56 @@ async function ensureSchema() {
       await prisma.$executeRawUnsafe('ALTER TABLE "User" ADD COLUMN "twoFactorEnabled" BOOLEAN DEFAULT 0');
       console.log('[Schema] Added missing twoFactorEnabled column to User table.');
     }
+
+    // Ensure Telemetry and Feedback tables exist
+    await prisma.$executeRawUnsafe(`
+      CREATE TABLE IF NOT EXISTS "CrashReport" (
+        "id" TEXT PRIMARY KEY,
+        "timestamp" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        "appVersion" TEXT NOT NULL DEFAULT '0.1.0',
+        "os" TEXT NOT NULL DEFAULT 'unknown',
+        "source" TEXT NOT NULL,
+        "message" TEXT NOT NULL,
+        "stackTrace" TEXT,
+        "location" TEXT,
+        "payload" TEXT,
+        "userFingerprint" TEXT,
+        "metadata" TEXT,
+        "status" TEXT NOT NULL DEFAULT 'UNRESOLVED',
+        "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+
+    await prisma.$executeRawUnsafe(`
+      CREATE TABLE IF NOT EXISTS "FeedbackTicket" (
+        "id" TEXT PRIMARY KEY,
+        "ticketId" TEXT UNIQUE NOT NULL,
+        "category" TEXT NOT NULL,
+        "severity" TEXT,
+        "title" TEXT NOT NULL,
+        "description" TEXT NOT NULL,
+        "userId" TEXT,
+        "userEmail" TEXT,
+        "fingerprint" TEXT,
+        "appVersion" TEXT NOT NULL DEFAULT '0.1.0',
+        "os" TEXT NOT NULL DEFAULT 'unknown',
+        "logs" TEXT,
+        "status" TEXT NOT NULL DEFAULT 'OPEN',
+        "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+
+    await prisma.$executeRawUnsafe(`
+      CREATE TABLE IF NOT EXISTS "ServerErrorEvent" (
+        "id" TEXT PRIMARY KEY,
+        "errorType" TEXT NOT NULL,
+        "message" TEXT NOT NULL,
+        "stackTrace" TEXT,
+        "metadata" TEXT,
+        "status" TEXT NOT NULL DEFAULT 'UNRESOLVED',
+        "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
   } catch (err: any) {
     console.error('[Schema] Failed to ensure schema columns:', err.message);
   }
