@@ -74,6 +74,49 @@ interface ReleaseRecord {
   createdAt: string;
 }
 
+interface CrashRecord {
+  id: string;
+  timestamp: string;
+  appVersion: string;
+  os: string;
+  source: string;
+  message: string;
+  stackTrace: string | null;
+  location: string | null;
+  payload: string | null;
+  userFingerprint: string | null;
+  metadata: string | null;
+  status: 'UNRESOLVED' | 'INVESTIGATING' | 'RESOLVED';
+  createdAt: string;
+}
+
+interface FeedbackRecord {
+  id: string;
+  ticketId: string;
+  category: 'bug' | 'feature' | 'feedback';
+  severity: 'low' | 'medium' | 'high' | 'critical' | null;
+  title: string;
+  description: string;
+  userId: string | null;
+  userEmail: string | null;
+  fingerprint: string | null;
+  appVersion: string;
+  os: string;
+  logs: string | null;
+  status: 'OPEN' | 'IN_PROGRESS' | 'RESOLVED';
+  createdAt: string;
+}
+
+interface ServerErrorRecord {
+  id: string;
+  errorType: string;
+  message: string;
+  stackTrace: string | null;
+  metadata: string | null;
+  status: string;
+  createdAt: string;
+}
+
 interface StatsData {
   totalUsers: number;
   totalLicenses: number;
@@ -118,7 +161,7 @@ interface ControlServerMetrics {
 
 function AdminContent() {
   const router = useRouter();
-  const [activeTab, setActiveTab] = useState<'overview' | 'users' | 'licenses' | 'devices' | 'tickets' | 'releases' | 'control-server'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'users' | 'licenses' | 'devices' | 'tickets' | 'releases' | 'control-server' | 'crashes' | 'feedback'>('overview');
   const [isClient, setIsClient] = useState(false);
   const [loading, setLoading] = useState(true);
   const [isAdmin, setIsAdmin] = useState(false);
@@ -133,6 +176,15 @@ function AdminContent() {
   const [devices, setDevices] = useState<DeviceRecord[]>([]);
   const [tickets, setTickets] = useState<TicketRecord[]>([]);
   const [releases, setReleases] = useState<ReleaseRecord[]>([]);
+  const [crashes, setCrashes] = useState<CrashRecord[]>([]);
+  const [feedbackList, setFeedbackList] = useState<FeedbackRecord[]>([]);
+  const [serverErrors, setServerErrors] = useState<ServerErrorRecord[]>([]);
+  const [selectedCrash, setSelectedCrash] = useState<CrashRecord | null>(null);
+  const [selectedFeedback, setSelectedFeedback] = useState<FeedbackRecord | null>(null);
+  const [crashFilter, setCrashFilter] = useState<'ALL' | 'UNRESOLVED' | 'RESOLVED'>('UNRESOLVED');
+  const [feedbackCategoryFilter, setFeedbackCategoryFilter] = useState<string>('ALL');
+  const [feedbackStatusFilter, setFeedbackStatusFilter] = useState<string>('ALL');
+  const [copiedLogs, setCopiedLogs] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
 
   // Go Control Server Telemetry State
@@ -383,12 +435,15 @@ function AdminContent() {
       }
 
       // Fetch Directory Tables
-      const [uRes, lRes, dRes, tRes, rRes] = await Promise.all([
+      const [uRes, lRes, dRes, tRes, rRes, crashRes, fbRes, seRes] = await Promise.all([
         fetch(`${API_BASE_URL}/api/v1/admin/users`, { headers: { Authorization: `Bearer ${token}` } }),
         fetch(`${API_BASE_URL}/api/v1/admin/licenses`, { headers: { Authorization: `Bearer ${token}` } }),
         fetch(`${API_BASE_URL}/api/v1/admin/devices`, { headers: { Authorization: `Bearer ${token}` } }),
         fetch(`${API_BASE_URL}/api/v1/admin/tickets`, { headers: { Authorization: `Bearer ${token}` } }),
         fetch(`${API_BASE_URL}/api/v1/admin/releases`, { headers: { Authorization: `Bearer ${token}` } }),
+        fetch(`${API_BASE_URL}/api/v1/admin/telemetry/crashes`, { headers: { Authorization: `Bearer ${token}` } }),
+        fetch(`${API_BASE_URL}/api/v1/admin/feedback`, { headers: { Authorization: `Bearer ${token}` } }),
+        fetch(`${API_BASE_URL}/api/v1/admin/telemetry/server-errors`, { headers: { Authorization: `Bearer ${token}` } }),
       ]);
 
       if (uRes.ok) setUsers((await uRes.json()).users || []);
@@ -396,6 +451,9 @@ function AdminContent() {
       if (dRes.ok) setDevices((await dRes.json()).devices || []);
       if (tRes.ok) setTickets((await tRes.json()).tickets || []);
       if (rRes && rRes.ok) setReleases((await rRes.json()).releases || []);
+      if (crashRes && crashRes.ok) setCrashes((await crashRes.json()).crashes || []);
+      if (fbRes && fbRes.ok) setFeedbackList((await fbRes.json()).tickets || []);
+      if (seRes && seRes.ok) setServerErrors((await seRes.json()).events || []);
 
     } catch (err) {
       console.error('Error fetching admin data:', err);
@@ -639,7 +697,78 @@ function AdminContent() {
       alert('Maintenance sweeper triggered.');
     } finally {
       setIsSweeping(false);
-      fetchAdminData();
+    }
+  };
+
+  const handleUpdateCrashStatus = async (id: string, status: 'RESOLVED' | 'INVESTIGATING' | 'UNRESOLVED') => {
+    const token = getAuthToken();
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/v1/admin/telemetry/crashes/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ status }),
+      });
+      if (res.ok) {
+        setCrashes((prev) => prev.map((c) => (c.id === id ? { ...c, status } : c)));
+        if (selectedCrash?.id === id) {
+          setSelectedCrash((prev) => (prev ? { ...prev, status } : null));
+        }
+      }
+    } catch (e) {
+      alert('Failed to update crash status.');
+    }
+  };
+
+  const handleDeleteCrash = async (id: string) => {
+    if (!confirm('Are you sure you want to delete this crash report?')) return;
+    const token = getAuthToken();
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/v1/admin/telemetry/crashes/${id}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (res.ok) {
+        setCrashes((prev) => prev.filter((c) => c.id !== id));
+        if (selectedCrash?.id === id) setSelectedCrash(null);
+      }
+    } catch (e) {
+      alert('Failed to delete crash report.');
+    }
+  };
+
+  const handleUpdateFeedbackStatus = async (id: string, status: 'OPEN' | 'IN_PROGRESS' | 'RESOLVED') => {
+    const token = getAuthToken();
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/v1/admin/feedback/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ status }),
+      });
+      if (res.ok) {
+        setFeedbackList((prev) => prev.map((f) => (f.id === id ? { ...f, status } : f)));
+        if (selectedFeedback?.id === id) {
+          setSelectedFeedback((prev) => (prev ? { ...prev, status } : null));
+        }
+      }
+    } catch (e) {
+      alert('Failed to update feedback status.');
+    }
+  };
+
+  const handleDeleteFeedback = async (id: string) => {
+    if (!confirm('Are you sure you want to delete this feedback ticket?')) return;
+    const token = getAuthToken();
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/v1/admin/feedback/${id}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (res.ok) {
+        setFeedbackList((prev) => prev.filter((f) => f.id !== id));
+        if (selectedFeedback?.id === id) setSelectedFeedback(null);
+      }
+    } catch (e) {
+      alert('Failed to delete feedback ticket.');
     }
   };
 
@@ -784,6 +913,8 @@ function AdminContent() {
             <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
               {[
                 { id: 'overview', name: 'System Overview', desc: 'Global metrics & health' },
+                { id: 'crashes', name: 'Crash Reports', desc: `Fatal Telemetry (${crashes.filter(c => c.status === 'UNRESOLVED').length} Unresolved)` },
+                { id: 'feedback', name: 'Feedback & Bugs', desc: `In-App Tickets (${feedbackList.filter(f => f.status === 'OPEN').length} Open)` },
                 { id: 'control-server', name: 'Go Control Node', desc: 'Server health, DB & storage' },
                 { id: 'users', name: 'User Directory', desc: 'Accounts & roles' },
                 { id: 'licenses', name: 'License Registry', desc: 'Keys & tier overrides' },
@@ -1444,6 +1575,381 @@ function AdminContent() {
                 </div>
               )}
 
+              {/* TAB: CRASH REPORTS & FATAL TELEMETRY */}
+              {activeTab === 'crashes' && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+                  {/* Top Filter Bar */}
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px' }}>
+                    <div>
+                      <h3 style={{ fontSize: '1.25rem', color: '#fff', margin: 0, fontFamily: 'var(--font-orbitron)' }}>
+                        Client & Daemon Crash Telemetry
+                      </h3>
+                      <p style={{ color: '#808085', fontSize: '0.8rem', margin: '4px 0 0' }}>
+                        Captures fatal Rust panics, React UI crashes, and unhandled desktop process aborts.
+                      </p>
+                    </div>
+
+                    <div style={{ display: 'flex', gap: '8px' }}>
+                      {(['ALL', 'UNRESOLVED', 'RESOLVED'] as const).map((filter) => (
+                        <button
+                          key={filter}
+                          onClick={() => setCrashFilter(filter)}
+                          style={{
+                            background: crashFilter === filter ? 'rgba(255, 0, 60, 0.15)' : 'rgba(255,255,255,0.03)',
+                            border: `1px solid ${crashFilter === filter ? 'var(--accent-red)' : 'rgba(255,255,255,0.08)'}`,
+                            color: crashFilter === filter ? '#ff859f' : '#a0a0a5',
+                            padding: '6px 14px',
+                            borderRadius: '6px',
+                            fontSize: '0.78rem',
+                            fontWeight: 600,
+                            cursor: 'pointer',
+                          }}
+                        >
+                          {filter === 'ALL' ? 'All Dumps' : filter === 'UNRESOLVED' ? 'Unresolved' : 'Resolved'}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Crash Reports Table */}
+                  <div style={{ background: 'rgba(10, 8, 8, 0.7)', border: '1px solid rgba(255, 255, 255, 0.06)', borderRadius: '12px', overflow: 'hidden' }}>
+                    <div style={{ overflowX: 'auto' }}>
+                      <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '0.82rem' }}>
+                        <thead>
+                          <tr style={{ background: 'rgba(255, 255, 255, 0.02)', borderBottom: '1px solid rgba(255, 255, 255, 0.06)', color: '#808085' }}>
+                            <th style={{ padding: '14px 18px', fontWeight: 600 }}>SOURCE</th>
+                            <th style={{ padding: '14px 18px', fontWeight: 600 }}>ERROR MESSAGE</th>
+                            <th style={{ padding: '14px 18px', fontWeight: 600 }}>VERSION / OS</th>
+                            <th style={{ padding: '14px 18px', fontWeight: 600 }}>TIMESTAMP</th>
+                            <th style={{ padding: '14px 18px', fontWeight: 600 }}>STATUS</th>
+                            <th style={{ padding: '14px 18px', fontWeight: 600, textAlign: 'right' }}>ACTIONS</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {crashes
+                            .filter((c) => crashFilter === 'ALL' || c.status === crashFilter)
+                            .map((c) => {
+                              const isRust = c.source === 'rust_panic';
+                              const isReact = c.source === 'react_error_boundary';
+                              return (
+                                <tr key={c.id} style={{ borderBottom: '1px solid rgba(255, 255, 255, 0.03)' }}>
+                                  <td style={{ padding: '14px 18px' }}>
+                                    <span
+                                      style={{
+                                        fontSize: '0.7rem',
+                                        fontWeight: 800,
+                                        fontFamily: 'monospace',
+                                        padding: '3px 8px',
+                                        borderRadius: '4px',
+                                        background: isRust ? 'rgba(255, 0, 60, 0.15)' : isReact ? 'rgba(0, 178, 255, 0.15)' : 'rgba(255, 184, 0, 0.15)',
+                                        color: isRust ? '#ff5577' : isReact ? '#00B2FF' : '#FFB800',
+                                        border: `1px solid ${isRust ? 'rgba(255, 0, 60, 0.3)' : isReact ? 'rgba(0, 178, 255, 0.3)' : 'rgba(255, 184, 0, 0.3)'}`,
+                                      }}
+                                    >
+                                      {isRust ? '⚡ RUST PANIC' : isReact ? '⚛️ REACT UI' : '⚠️ UNHANDLED'}
+                                    </span>
+                                  </td>
+                                  <td style={{ padding: '14px 18px', maxWidth: '340px' }}>
+                                    <div style={{ color: '#fff', fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                      {c.message}
+                                    </div>
+                                    {c.location && (
+                                      <div style={{ color: '#808085', fontSize: '0.72rem', fontFamily: 'monospace', marginTop: '2px' }}>
+                                        {c.location}
+                                      </div>
+                                    )}
+                                  </td>
+                                  <td style={{ padding: '14px 18px', color: '#a0a0a5', fontFamily: 'monospace', fontSize: '0.75rem' }}>
+                                    <div>v{c.appVersion}</div>
+                                    <div style={{ color: '#606065', fontSize: '0.7rem' }}>{c.os.slice(0, 20)}</div>
+                                  </td>
+                                  <td style={{ padding: '14px 18px', color: '#808085', fontSize: '0.75rem', whiteSpace: 'nowrap' }}>
+                                    {new Date(c.timestamp).toLocaleString()}
+                                  </td>
+                                  <td style={{ padding: '14px 18px' }}>
+                                    <span
+                                      style={{
+                                        fontSize: '0.72rem',
+                                        fontWeight: 700,
+                                        color: c.status === 'RESOLVED' ? '#00e676' : c.status === 'INVESTIGATING' ? '#ffd600' : '#ff003c',
+                                      }}
+                                    >
+                                      {c.status}
+                                    </span>
+                                  </td>
+                                  <td style={{ padding: '14px 18px', textAlign: 'right' }}>
+                                    <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
+                                      <button
+                                        onClick={() => setSelectedCrash(c)}
+                                        style={{
+                                          background: 'rgba(0, 178, 255, 0.1)',
+                                          border: '1px solid rgba(0, 178, 255, 0.3)',
+                                          color: '#00B2FF',
+                                          padding: '5px 10px',
+                                          borderRadius: '4px',
+                                          fontSize: '0.75rem',
+                                          cursor: 'pointer',
+                                          fontWeight: 600,
+                                        }}
+                                      >
+                                        Inspect
+                                      </button>
+                                      {c.status !== 'RESOLVED' ? (
+                                        <button
+                                          onClick={() => handleUpdateCrashStatus(c.id, 'RESOLVED')}
+                                          style={{
+                                            background: 'rgba(0, 230, 118, 0.1)',
+                                            border: '1px solid rgba(0, 230, 118, 0.3)',
+                                            color: '#00e676',
+                                            padding: '5px 10px',
+                                            borderRadius: '4px',
+                                            fontSize: '0.75rem',
+                                            cursor: 'pointer',
+                                            fontWeight: 600,
+                                          }}
+                                        >
+                                          Resolve
+                                        </button>
+                                      ) : (
+                                        <button
+                                          onClick={() => handleUpdateCrashStatus(c.id, 'UNRESOLVED')}
+                                          style={{
+                                            background: 'rgba(255, 255, 255, 0.05)',
+                                            border: '1px solid rgba(255, 255, 255, 0.1)',
+                                            color: '#a0a0a5',
+                                            padding: '5px 10px',
+                                            borderRadius: '4px',
+                                            fontSize: '0.75rem',
+                                            cursor: 'pointer',
+                                          }}
+                                        >
+                                          Reopen
+                                        </button>
+                                      )}
+                                      <button
+                                        onClick={() => handleDeleteCrash(c.id)}
+                                        style={{
+                                          background: 'transparent',
+                                          border: '1px solid rgba(255, 0, 60, 0.2)',
+                                          color: '#ff859f',
+                                          padding: '5px 8px',
+                                          borderRadius: '4px',
+                                          fontSize: '0.75rem',
+                                          cursor: 'pointer',
+                                        }}
+                                      >
+                                        ✕
+                                      </button>
+                                    </div>
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          {crashes.length === 0 && (
+                            <tr>
+                              <td colSpan={6} style={{ padding: '40px', textAlign: 'center', color: '#606065' }}>
+                                No crash events reported. Desktop clients and daemons are running stably!
+                              </td>
+                            </tr>
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* TAB: IN-APP FEEDBACK & BUG REPORTS */}
+              {activeTab === 'feedback' && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+                  {/* Top Bar */}
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px' }}>
+                    <div>
+                      <h3 style={{ fontSize: '1.25rem', color: '#fff', margin: 0, fontFamily: 'var(--font-orbitron)' }}>
+                        In-App Feedback & User Bug Reports
+                      </h3>
+                      <p style={{ color: '#808085', fontSize: '0.8rem', margin: '4px 0 0' }}>
+                        Tickets submitted directly from the desktop sidebar feedback button with optional daemon logs attached.
+                      </p>
+                    </div>
+
+                    <div style={{ display: 'flex', gap: '10px' }}>
+                      <select
+                        value={feedbackCategoryFilter}
+                        onChange={(e) => setFeedbackCategoryFilter(e.target.value)}
+                        style={{
+                          background: '#0a0808',
+                          border: '1px solid rgba(255,255,255,0.1)',
+                          padding: '6px 12px',
+                          borderRadius: '6px',
+                          color: '#fff',
+                          fontSize: '0.8rem',
+                          outline: 'none',
+                        }}
+                      >
+                        <option value="ALL">All Categories</option>
+                        <option value="bug">Bugs Only</option>
+                        <option value="feature">Feature Requests</option>
+                        <option value="feedback">General Feedback</option>
+                      </select>
+
+                      <select
+                        value={feedbackStatusFilter}
+                        onChange={(e) => setFeedbackStatusFilter(e.target.value)}
+                        style={{
+                          background: '#0a0808',
+                          border: '1px solid rgba(255,255,255,0.1)',
+                          padding: '6px 12px',
+                          borderRadius: '6px',
+                          color: '#fff',
+                          fontSize: '0.8rem',
+                          outline: 'none',
+                        }}
+                      >
+                        <option value="ALL">All Statuses</option>
+                        <option value="OPEN">Open Only</option>
+                        <option value="IN_PROGRESS">In Progress</option>
+                        <option value="RESOLVED">Resolved</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  {/* Feedback Cards List */}
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+                    {feedbackList
+                      .filter((f) => feedbackCategoryFilter === 'ALL' || f.category === feedbackCategoryFilter)
+                      .filter((f) => feedbackStatusFilter === 'ALL' || f.status === feedbackStatusFilter)
+                      .map((f) => {
+                        const isBug = f.category === 'bug';
+                        const isFeature = f.category === 'feature';
+                        return (
+                          <div
+                            key={f.id}
+                            style={{
+                              background: 'rgba(10, 8, 8, 0.75)',
+                              border: `1px solid ${f.status === 'OPEN' ? 'rgba(255, 0, 60, 0.25)' : 'rgba(255,255,255,0.06)'}`,
+                              borderRadius: '12px',
+                              padding: '20px 24px',
+                              display: 'flex',
+                              flexDirection: 'column',
+                              gap: '14px',
+                            }}
+                          >
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '12px' }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                                <span style={{ fontFamily: 'monospace', fontWeight: 800, color: '#ff859f', fontSize: '0.85rem' }}>
+                                  {f.ticketId}
+                                </span>
+                                <span
+                                  style={{
+                                    fontSize: '0.7rem',
+                                    fontWeight: 800,
+                                    textTransform: 'uppercase',
+                                    padding: '2px 8px',
+                                    borderRadius: '4px',
+                                    background: isBug ? 'rgba(255, 0, 60, 0.15)' : isFeature ? 'rgba(180, 0, 255, 0.15)' : 'rgba(0, 230, 118, 0.15)',
+                                    color: isBug ? '#ff5577' : isFeature ? '#d580ff' : '#00e676',
+                                    border: `1px solid ${isBug ? 'rgba(255, 0, 60, 0.3)' : isFeature ? 'rgba(180, 0, 255, 0.3)' : 'rgba(0, 230, 118, 0.3)'}`,
+                                  }}
+                                >
+                                  {f.category}
+                                </span>
+                                {f.severity && (
+                                  <span
+                                    style={{
+                                      fontSize: '0.68rem',
+                                      fontWeight: 700,
+                                      textTransform: 'uppercase',
+                                      color: f.severity === 'critical' ? '#ff003c' : f.severity === 'high' ? '#ff8500' : '#a0a0a5',
+                                    }}
+                                  >
+                                    [{f.severity} severity]
+                                  </span>
+                                )}
+                              </div>
+
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                                <span style={{ color: '#808085', fontSize: '0.75rem' }}>
+                                  {new Date(f.createdAt).toLocaleString()}
+                                </span>
+                                <select
+                                  value={f.status}
+                                  onChange={(e) => handleUpdateFeedbackStatus(f.id, e.target.value as any)}
+                                  style={{
+                                    background: '#060404',
+                                    border: '1px solid rgba(255,255,255,0.15)',
+                                    color: f.status === 'RESOLVED' ? '#00e676' : f.status === 'IN_PROGRESS' ? '#ffd600' : '#ff003c',
+                                    fontWeight: 700,
+                                    fontSize: '0.75rem',
+                                    padding: '4px 8px',
+                                    borderRadius: '6px',
+                                    outline: 'none',
+                                    cursor: 'pointer',
+                                  }}
+                                >
+                                  <option value="OPEN">OPEN</option>
+                                  <option value="IN_PROGRESS">IN PROGRESS</option>
+                                  <option value="RESOLVED">RESOLVED</option>
+                                </select>
+                                <button
+                                  onClick={() => handleDeleteFeedback(f.id)}
+                                  style={{ background: 'transparent', border: 'none', color: '#606065', cursor: 'pointer', fontSize: '0.9rem' }}
+                                >
+                                  ✕
+                                </button>
+                              </div>
+                            </div>
+
+                            <div>
+                              <h4 style={{ margin: '0 0 6px 0', color: '#fff', fontSize: '1rem', fontWeight: 700 }}>
+                                {f.title}
+                              </h4>
+                              <p style={{ margin: 0, color: '#c0c0c5', fontSize: '0.85rem', lineHeight: 1.5, whiteSpace: 'pre-wrap' }}>
+                                {f.description}
+                              </p>
+                            </div>
+
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderTop: '1px solid rgba(255,255,255,0.04)', paddingTop: '12px', flexWrap: 'wrap', gap: '8px' }}>
+                              <div style={{ fontSize: '0.75rem', color: '#808085' }}>
+                                Reporter: <span style={{ color: '#fff' }}>{f.userEmail || 'Anonymous'}</span> | Client: <span style={{ fontFamily: 'monospace' }}>v{f.appVersion}</span> ({f.os.slice(0, 24)})
+                              </div>
+
+                              {f.logs ? (
+                                <button
+                                  onClick={() => setSelectedFeedback(f)}
+                                  style={{
+                                    background: 'rgba(0, 255, 157, 0.1)',
+                                    border: '1px solid rgba(0, 255, 157, 0.3)',
+                                    color: '#00FF9D',
+                                    padding: '5px 12px',
+                                    borderRadius: '6px',
+                                    fontSize: '0.75rem',
+                                    fontWeight: 700,
+                                    cursor: 'pointer',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    gap: '6px',
+                                  }}
+                                >
+                                  📄 View Daemon Logs Attached
+                                </button>
+                              ) : (
+                                <span style={{ fontSize: '0.72rem', color: '#505055' }}>No local logs attached</span>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })}
+
+                    {feedbackList.length === 0 && (
+                      <div style={{ background: 'rgba(10, 8, 8, 0.7)', border: '1px solid rgba(255, 255, 255, 0.05)', borderRadius: '12px', padding: '50px', textAlign: 'center', color: '#606065' }}>
+                        No in-app feedback or bug reports submitted yet.
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
             </div>
 
           </div>
@@ -1676,6 +2182,144 @@ function AdminContent() {
               <button onClick={handlePublishRelease} disabled={isUploading} className="glow-btn" style={{ background: 'var(--accent-red)', border: 'none', color: '#fff', padding: '10px 18px', borderRadius: '6px', cursor: isUploading ? 'not-allowed' : 'pointer', fontSize: '0.85rem', fontWeight: 700, fontFamily: 'var(--font-orbitron)' }}>
                 {isUploading ? 'Uploading & Publishing...' : 'Publish Release'}
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Crash Inspector Modal */}
+      {selectedCrash && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.85)', backdropFilter: 'blur(8px)', zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}>
+          <div style={{ background: '#0a0808', border: '1px solid var(--accent-red)', borderRadius: '12px', padding: '28px', maxWidth: '780px', width: '100%', maxHeight: '85vh', display: 'flex', flexDirection: 'column', gap: '18px', color: '#fff' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div>
+                <h3 style={{ margin: 0, fontSize: '1.2rem', fontFamily: 'var(--font-orbitron)', color: '#ff5577' }}>
+                  Fatal Crash Diagnostic
+                </h3>
+                <span style={{ fontSize: '0.75rem', color: '#808085', fontFamily: 'monospace' }}>
+                  {selectedCrash.id} • v{selectedCrash.appVersion} • {selectedCrash.source}
+                </span>
+              </div>
+              <button onClick={() => setSelectedCrash(null)} style={{ background: 'transparent', border: 'none', color: '#a0a0a5', fontSize: '1.2rem', cursor: 'pointer' }}>
+                ✕
+              </button>
+            </div>
+
+            <div style={{ background: 'rgba(255, 0, 60, 0.05)', border: '1px solid rgba(255, 0, 60, 0.2)', padding: '14px 18px', borderRadius: '8px' }}>
+              <div style={{ fontSize: '0.72rem', color: '#ff859f', textTransform: 'uppercase', fontWeight: 700, marginBottom: '4px' }}>Error Message</div>
+              <div style={{ fontSize: '0.9rem', color: '#fff', fontWeight: 600 }}>{selectedCrash.message}</div>
+              {selectedCrash.location && (
+                <div style={{ fontSize: '0.78rem', color: '#a0a0a5', fontFamily: 'monospace', marginTop: '4px' }}>
+                  Location: {selectedCrash.location}
+                </div>
+              )}
+            </div>
+
+            {selectedCrash.stackTrace && (
+              <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+                  <span style={{ fontSize: '0.75rem', color: '#808085', textTransform: 'uppercase', fontWeight: 700 }}>Full Backtrace</span>
+                  <button
+                    onClick={() => {
+                      navigator.clipboard.writeText(selectedCrash.stackTrace || '');
+                      alert('Backtrace copied to clipboard!');
+                    }}
+                    style={{ background: 'transparent', border: 'none', color: '#00B2FF', fontSize: '0.75rem', cursor: 'pointer' }}
+                  >
+                    Copy Backtrace
+                  </button>
+                </div>
+                <div style={{ flex: 1, background: '#040202', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '8px', padding: '14px', overflowY: 'auto', maxHeight: '300px', fontFamily: 'monospace', fontSize: '0.78rem', color: '#00FF9D', lineHeight: 1.5, whiteSpace: 'pre-wrap' }}>
+                  {selectedCrash.stackTrace}
+                </div>
+              </div>
+            )}
+
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderTop: '1px solid rgba(255,255,255,0.06)', paddingTop: '16px' }}>
+              <div style={{ fontSize: '0.75rem', color: '#808085' }}>
+                Reported: {new Date(selectedCrash.timestamp).toLocaleString()}
+              </div>
+              <div style={{ display: 'flex', gap: '10px' }}>
+                <button
+                  onClick={() => handleUpdateCrashStatus(selectedCrash.id, selectedCrash.status === 'RESOLVED' ? 'UNRESOLVED' : 'RESOLVED')}
+                  style={{
+                    background: selectedCrash.status === 'RESOLVED' ? 'rgba(255,255,255,0.05)' : 'rgba(0, 230, 118, 0.15)',
+                    border: `1px solid ${selectedCrash.status === 'RESOLVED' ? 'rgba(255,255,255,0.1)' : 'rgba(0, 230, 118, 0.4)'}`,
+                    color: selectedCrash.status === 'RESOLVED' ? '#fff' : '#00e676',
+                    padding: '8px 16px',
+                    borderRadius: '6px',
+                    fontSize: '0.8rem',
+                    fontWeight: 700,
+                    cursor: 'pointer',
+                  }}
+                >
+                  {selectedCrash.status === 'RESOLVED' ? 'Reopen Crash' : 'Mark as Resolved'}
+                </button>
+                <button
+                  onClick={() => setSelectedCrash(null)}
+                  style={{ background: 'transparent', border: '1px solid rgba(255,255,255,0.1)', color: '#fff', padding: '8px 16px', borderRadius: '6px', fontSize: '0.8rem', cursor: 'pointer' }}
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Daemon Log Viewer Modal */}
+      {selectedFeedback && selectedFeedback.logs && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.85)', backdropFilter: 'blur(8px)', zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}>
+          <div style={{ background: '#0a0808', border: '1px solid rgba(0, 255, 157, 0.4)', borderRadius: '12px', padding: '28px', maxWidth: '850px', width: '100%', maxHeight: '85vh', display: 'flex', flexDirection: 'column', gap: '16px', color: '#fff' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div>
+                <h3 style={{ margin: 0, fontSize: '1.15rem', fontFamily: 'var(--font-orbitron)', color: '#00FF9D' }}>
+                  Attached Daemon Tracing Logs
+                </h3>
+                <span style={{ fontSize: '0.75rem', color: '#808085', fontFamily: 'monospace' }}>
+                  Ticket: {selectedFeedback.ticketId} • Reporter: {selectedFeedback.userEmail || 'Anonymous'}
+                </span>
+              </div>
+              <button onClick={() => setSelectedFeedback(null)} style={{ background: 'transparent', border: 'none', color: '#a0a0a5', fontSize: '1.2rem', cursor: 'pointer' }}>
+                ✕
+              </button>
+            </div>
+
+            <div style={{ flex: 1, background: '#020101', border: '1px solid rgba(0, 255, 157, 0.2)', borderRadius: '8px', padding: '16px', overflowY: 'auto', maxHeight: '420px', fontFamily: 'monospace', fontSize: '0.75rem', color: '#00FF9D', lineHeight: 1.5, whiteSpace: 'pre-wrap' }}>
+              {selectedFeedback.logs}
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderTop: '1px solid rgba(255,255,255,0.06)', paddingTop: '14px' }}>
+              <span style={{ fontSize: '0.75rem', color: '#808085' }}>
+                Captured from local daemon memory buffer (Port 7179)
+              </span>
+              <div style={{ display: 'flex', gap: '10px' }}>
+                <button
+                  onClick={() => {
+                    navigator.clipboard.writeText(selectedFeedback.logs || '');
+                    setCopiedLogs(true);
+                    setTimeout(() => setCopiedLogs(false), 2000);
+                  }}
+                  style={{
+                    background: 'rgba(0, 255, 157, 0.15)',
+                    border: '1px solid rgba(0, 255, 157, 0.4)',
+                    color: '#00FF9D',
+                    padding: '8px 18px',
+                    borderRadius: '6px',
+                    fontSize: '0.8rem',
+                    fontWeight: 700,
+                    cursor: 'pointer',
+                  }}
+                >
+                  {copiedLogs ? '✓ Copied Logs!' : 'Copy Raw Logs'}
+                </button>
+                <button
+                  onClick={() => setSelectedFeedback(null)}
+                  style={{ background: 'transparent', border: '1px solid rgba(255,255,255,0.1)', color: '#fff', padding: '8px 16px', borderRadius: '6px', fontSize: '0.8rem', cursor: 'pointer' }}
+                >
+                  Close
+                </button>
+              </div>
             </div>
           </div>
         </div>
