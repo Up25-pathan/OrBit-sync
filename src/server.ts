@@ -134,6 +134,58 @@ app.get('/health', (req, res) => {
   res.status(200).json({ status: 'OK', timestamp: new Date() });
 });
 
+// Minimal Frontend for OAuth flow completion
+app.get('/console', async (req, res) => {
+  const email = req.query.email as string;
+  const token = req.query.token as string;
+  let licenseKey = 'Not found';
+
+  if (token) {
+    try {
+      const jwt = require('jsonwebtoken');
+      const decoded = jwt.verify(token, process.env.JWT_SECRET || 'dev-only-insecure-fallback-change-me') as any;
+      if (decoded && decoded.id) {
+        const user = await prisma.user.findUnique({
+          where: { id: decoded.id },
+          include: { license: true }
+        });
+        if (user && user.license) {
+          licenseKey = user.license.licenseKey;
+        }
+      }
+    } catch (e) {
+      console.error('Failed to parse token in /console', e);
+    }
+  }
+
+  res.send(`
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+      <meta charset="UTF-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <title>OrBit Console</title>
+      <style>
+        body { font-family: 'Inter', sans-serif; background: #0a0808; color: #fff; padding: 40px; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }
+        .card { background: rgba(255,255,255,0.05); padding: 40px; border-radius: 12px; border: 1px solid rgba(255,0,96,0.3); text-align: center; max-width: 500px; width: 100%; box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
+        h1 { color: #ff0060; margin-top: 0; }
+        .key { background: #000; padding: 15px; border-radius: 8px; color: #00FF9D; font-family: monospace; font-size: 1.2rem; margin: 20px 0; border: 1px solid #333; }
+        p { color: #aaa; line-height: 1.5; }
+      </style>
+    </head>
+    <body>
+      <div class="card">
+        <h1>Authentication Successful</h1>
+        <p>Welcome, <strong>${email || 'User'}</strong>!</p>
+        <p>Your account has been securely authenticated. Please use the License Key below to activate your OrBit Desktop App.</p>
+        <div class="key">${licenseKey}</div>
+        <p>You may now close this window and return to the OrBit Desktop App.</p>
+      </div>
+    </body>
+    </html>
+  `);
+});
+
 // Global Error Handler
 app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
   console.error('[Express Global Error]:', err);
