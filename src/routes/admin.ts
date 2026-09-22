@@ -334,13 +334,13 @@ router.put('/users/:id/tier', async (req: Request, res: Response) => {
       update: {
         planTier: tier,
         status: 'active',
-        expiresAt: expiresAt ? new Date(expiresAt) : new Date(Date.now() + 365 * 24 * 60 * 60 * 1000),
+        expiresAt: expiresAt ? new Date(expiresAt) : new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
       },
       create: {
         userId: id,
         planTier: tier,
         status: 'active',
-        expiresAt: expiresAt ? new Date(expiresAt) : new Date(Date.now() + 365 * 24 * 60 * 60 * 1000),
+        expiresAt: expiresAt ? new Date(expiresAt) : new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
       },
     });
 
