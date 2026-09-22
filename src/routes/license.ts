@@ -249,8 +249,15 @@ async function handleDeviceHandshake(req: Request, res: Response) {
       { expiresIn: '30d' }
     );
 
+    const displayName = license.user.displayName || license.user.email.split('@')[0];
+
     return res.status(200).json({
+      valid: true,
       status: 'VALID',
+      userId: license.user.id,
+      displayName,
+      avatarUrl: license.user.avatarUrl || null,
+      email: license.user.email,
       planTier,
       price: subscription.amountPaid,
       expiresAt: subscription.expiresAt.toISOString(),
