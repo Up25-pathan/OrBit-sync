@@ -100,6 +100,7 @@ router.get('/verify', async (req: Request, res: Response) => {
       avatarUrl: user.avatarUrl || null,
       email: user.email,
       planTier,
+      price: subscription.amountPaid,
       expiresAt: subscription.expiresAt.toISOString(),
     });
 
@@ -168,6 +169,7 @@ router.post('/verify', async (req: Request, res: Response) => {
       avatarUrl: user.avatarUrl || null,
       email: user.email,
       planTier,
+      price: subscription.amountPaid,
       expiresAt: subscription.expiresAt.toISOString(),
     });
 
@@ -250,6 +252,7 @@ async function handleDeviceHandshake(req: Request, res: Response) {
     return res.status(200).json({
       status: 'VALID',
       planTier,
+      price: subscription.amountPaid,
       expiresAt: subscription.expiresAt.toISOString(),
       token: validationToken,
     });
