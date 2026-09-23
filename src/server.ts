@@ -167,20 +167,38 @@ app.get('/console', async (req, res) => {
       <title>OrBit Console</title>
       <style>
         body { font-family: 'Inter', sans-serif; background: #0a0808; color: #fff; padding: 40px; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }
-        .card { background: rgba(255,255,255,0.05); padding: 40px; border-radius: 12px; border: 1px solid rgba(255,0,96,0.3); text-align: center; max-width: 500px; width: 100%; box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
-        h1 { color: #ff0060; margin-top: 0; }
-        .key { background: #000; padding: 15px; border-radius: 8px; color: #00FF9D; font-family: monospace; font-size: 1.2rem; margin: 20px 0; border: 1px solid #333; }
-        p { color: #aaa; line-height: 1.5; }
+        .card { background: rgba(255,255,255,0.05); padding: 40px; border-radius: 12px; border: 1px solid rgba(0, 178, 255, 0.3); text-align: center; max-width: 550px; width: 100%; box-shadow: 0 10px 30px rgba(0,0,0,0.5); position: relative; overflow: hidden; }
+        .card::before { content: ""; position: absolute; top: -50%; left: -50%; width: 200%; height: 200%; background: radial-gradient(circle, rgba(0, 178, 255, 0.1) 0%, transparent 60%); z-index: 0; pointer-events: none; }
+        .content { position: relative; z-index: 1; }
+        h1 { color: #00B2FF; margin-top: 0; font-weight: 800; letter-spacing: 1px; }
+        .key { background: #000; padding: 15px; border-radius: 8px; color: #00FF9D; font-family: monospace; font-size: 1.2rem; margin: 24px 0; border: 1px solid #333; }
+        p { color: #aaa; line-height: 1.6; }
+        .btn { display: inline-block; margin-top: 10px; padding: 14px 28px; background: linear-gradient(135deg, #00B2FF 0%, #0077FF 100%); color: #fff; text-decoration: none; border-radius: 8px; font-weight: bold; font-size: 0.95rem; box-shadow: 0 4px 15px rgba(0, 178, 255, 0.3); transition: 0.2s; cursor: pointer; border: none; }
+        .btn:hover { transform: translateY(-2px); box-shadow: 0 6px 20px rgba(0, 178, 255, 0.4); }
       </style>
     </head>
     <body>
       <div class="card">
-        <h1>Authentication Successful</h1>
-        <p>Welcome, <strong>${email || 'User'}</strong>!</p>
-        <p>Your account has been securely authenticated. Please use the License Key below to activate your OrBit Desktop App.</p>
-        <div class="key">${licenseKey}</div>
-        <p>You may now close this window and return to the OrBit Desktop App.</p>
+        <div class="content">
+          <h1>Authentication Successful</h1>
+          <p>Welcome, <strong style="color:#fff;">${email || 'User'}</strong>!</p>
+          <p>We are securely redirecting you back to the OrBit Desktop App...</p>
+          
+          <a href="orbit://auth?token=${licenseKey}" class="btn" id="deepLinkBtn">Open OrBit Desktop App</a>
+          
+          <div style="margin-top: 30px; padding-top: 20px; border-top: 1px solid rgba(255,255,255,0.1);">
+            <p style="font-size: 0.85rem; margin-bottom: 10px;">If the app does not open automatically, copy your Access Key and paste it into the app manually:</p>
+            <div class="key">${licenseKey}</div>
+          </div>
+        </div>
       </div>
+      
+      <script>
+        // Attempt to deep link automatically
+        setTimeout(() => {
+          window.location.href = "orbit://auth?token=${licenseKey}";
+        }, 500);
+      </script>
     </body>
     </html>
   `);
