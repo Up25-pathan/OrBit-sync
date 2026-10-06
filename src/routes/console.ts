@@ -35,35 +35,15 @@ router.get('/dashboard', authenticateJWT, async (req: AuthRequest, res: Response
 
     let userLicense = user.license;
     if (!userLicense) {
-      const generatedKey = generateLicenseKey(user.subscription?.planTier || 'free');
+      const generatedKey = generateLicenseKey();
       userLicense = await prisma.license.create({
         data: {
           userId,
           licenseKey: generatedKey,
-          maxDevices: user.subscription?.planTier === 'enterprise' ? 9999 : 3,
+          maxDevices: user.subscription?.planTier === 'pro' ? 10 : 3,
         },
         include: { devices: true },
       });
-    } else {
-      // Auto-sync existing license key to the current subscription tier if there is a mismatch!
-      const subscriptionTier = user.subscription?.planTier || 'free';
-      const parsed = parseLicenseKey(userLicense.licenseKey);
-      const normalizedSubTier = normalizeTier(subscriptionTier);
-
-      if (parsed.planTier !== normalizedSubTier) {
-        const newLicenseKey = generateLicenseKey(subscriptionTier);
-        const maxDevices = subscriptionTier === 'enterprise' ? 9999 : (subscriptionTier === 'pro' ? 10 : 3);
-
-        userLicense = await prisma.license.update({
-          where: { id: userLicense.id },
-          data: {
-            licenseKey: newLicenseKey,
-            maxDevices,
-          },
-          include: { devices: true },
-        });
-        console.log(`[License Sync] Automatically upgraded license key for user: ${user.email} from ${parsed.planTier.toUpperCase()} to ${normalizedSubTier.toUpperCase()}`);
-      }
     }
 
     return res.status(200).json({

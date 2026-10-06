@@ -21,9 +21,24 @@ if (!CONTROL_SERVER_SECRET) {
 }
 const CONTROL_SERVER_SECRET_FALLBACK = CONTROL_SERVER_SECRET || 'orbit-control-server-verification-secret-2026';
 
+// Helper to resolve effective plan tier and subscription validity
+function resolveEffectiveSubscription(subscription: any) {
+  const isSubActive = subscription && 
+                      subscription.status === 'active' && 
+                      new Date(subscription.expiresAt) >= new Date();
+
+  const planTier = isSubActive ? normalizeTier(subscription.planTier) : 'free';
+  return {
+    isSubActive,
+    planTier,
+    expiresAt: subscription?.expiresAt ? subscription.expiresAt.toISOString() : new Date().toISOString(),
+    amountPaid: subscription?.amountPaid || 0,
+  };
+}
+
 // ----------------------------------------------------
 // 1. PUBLIC CONTROL SERVER LICENSE VERIFICATION ENDPOINT
-// GET /api/v1/licenses/verify?key=ORBIT-PRO-9F8A2B-1775865600-A3F9B2
+// GET /api/v1/licenses/verify?key=ORBIT-7F9A-B23C-8E1D-4A5B
 // ----------------------------------------------------
 router.get('/verify', async (req: Request, res: Response) => {
   try {
@@ -48,7 +63,7 @@ router.get('/verify', async (req: Request, res: Response) => {
 
     const licenseKey = keyQuery.trim();
 
-    // Query database for license, user details, and active subscription
+    // Query database for license, user details, and subscription
     const license = await prisma.license.findUnique({
       where: { licenseKey },
       include: {
@@ -69,26 +84,7 @@ router.get('/verify', async (req: Request, res: Response) => {
     }
 
     const user = license.user;
-    const subscription = user.subscription;
-
-    // Check subscription validity
-    if (!subscription || subscription.status !== 'active') {
-      return res.status(402).json({
-        valid: false,
-        status: 'INACTIVE',
-        error: 'The subscription associated with this license key is currently inactive.',
-      });
-    }
-
-    if (new Date(subscription.expiresAt) < new Date()) {
-      return res.status(402).json({
-        valid: false,
-        status: 'EXPIRED',
-        error: 'The subscription associated with this license key has expired.',
-      });
-    }
-
-    const planTier = normalizeTier(subscription.planTier);
+    const { planTier, expiresAt, amountPaid } = resolveEffectiveSubscription(user.subscription);
     const displayName = user.displayName || user.email.split('@')[0];
 
     // Return structured payload matching Dual-Server System Architecture specification
@@ -100,8 +96,8 @@ router.get('/verify', async (req: Request, res: Response) => {
       avatarUrl: user.avatarUrl || null,
       email: user.email,
       planTier,
-      price: subscription.amountPaid,
-      expiresAt: subscription.expiresAt.toISOString(),
+      price: amountPaid,
+      expiresAt,
     });
 
   } catch (error: any) {
@@ -126,10 +122,7 @@ router.post('/verify', async (req: Request, res: Response) => {
     });
   }
 
-  // Delegate to logic by simulating query param
-  req.query.key = licenseKey;
-  
-  // If it's a device handshake request containing deviceId, process node registration
+  // Delegate to device handshake if deviceId is provided
   if (req.body?.deviceId) {
     return handleDeviceHandshake(req, res);
   }
@@ -137,7 +130,7 @@ router.post('/verify', async (req: Request, res: Response) => {
   // Standard Control Server key validation
   try {
     const license = await prisma.license.findUnique({
-      where: { licenseKey },
+      where: { licenseKey: licenseKey.trim() },
       include: {
         user: {
           include: {
@@ -152,13 +145,7 @@ router.post('/verify', async (req: Request, res: Response) => {
     }
 
     const user = license.user;
-    const subscription = user.subscription;
-
-    if (!subscription || subscription.status !== 'active' || new Date(subscription.expiresAt) < new Date()) {
-      return res.status(402).json({ valid: false, status: 'EXPIRED', error: 'Subscription is inactive or expired.' });
-    }
-
-    const planTier = normalizeTier(subscription.planTier);
+    const { planTier, expiresAt, amountPaid } = resolveEffectiveSubscription(user.subscription);
     const displayName = user.displayName || user.email.split('@')[0];
 
     return res.status(200).json({
@@ -169,8 +156,8 @@ router.post('/verify', async (req: Request, res: Response) => {
       avatarUrl: user.avatarUrl || null,
       email: user.email,
       planTier,
-      price: subscription.amountPaid,
-      expiresAt: subscription.expiresAt.toISOString(),
+      price: amountPaid,
+      expiresAt,
     });
 
   } catch (error: any) {
@@ -185,7 +172,7 @@ async function handleDeviceHandshake(req: Request, res: Response) {
     const { licenseKey, deviceId, hostname, platform } = req.body;
 
     const license = await prisma.license.findUnique({
-      where: { licenseKey },
+      where: { licenseKey: (licenseKey || '').trim() },
       include: {
         devices: true,
         user: {
@@ -200,12 +187,7 @@ async function handleDeviceHandshake(req: Request, res: Response) {
       return res.status(404).json({ status: 'INVALID', message: 'License key provided is invalid.' });
     }
 
-    const subscription = license.user.subscription;
-    if (!subscription || subscription.status !== 'active' || new Date(subscription.expiresAt) < new Date()) {
-      return res.status(402).json({ status: 'EXPIRED', message: 'Subscription expired or inactive.' });
-    }
-
-    const planTier = normalizeTier(subscription.planTier);
+    const { planTier, expiresAt, amountPaid } = resolveEffectiveSubscription(license.user.subscription);
     const maxDevices = planTier === 'pro' ? 10 : planTier === 'enterprise' ? 999 : 3;
 
     const existingDevice = license.devices.find((d) => d.deviceId === deviceId);
@@ -242,7 +224,7 @@ async function handleDeviceHandshake(req: Request, res: Response) {
         status: 'VALID',
         userId: license.user.id,
         planTier,
-        expiresAt: subscription.expiresAt.toISOString(),
+        expiresAt,
         deviceId,
       },
       JWT_SECRET_FALLBACK,
@@ -259,8 +241,8 @@ async function handleDeviceHandshake(req: Request, res: Response) {
       avatarUrl: license.user.avatarUrl || null,
       email: license.user.email,
       planTier,
-      price: subscription.amountPaid,
-      expiresAt: subscription.expiresAt.toISOString(),
+      price: amountPaid,
+      expiresAt,
       token: validationToken,
     });
   } catch (error: any) {

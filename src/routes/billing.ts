@@ -9,28 +9,31 @@ import { generateLicenseKey } from '../utils/licenseGenerator';
 const express = require('express');
 const router = express.Router();
 
-// Helper to update/regenerate user license key on subscription upgrade
+// Helper to update user device limits on subscription upgrade without overwriting permanent license key
 async function updateUserLicense(userId: string, planTier: string) {
   try {
     const normalizedTier = planTier === 'mesh' ? 'pro' : planTier;
     const maxDevices = planTier === 'mesh' ? 9999 : (planTier === 'pro' ? 10 : 3);
-    const newLicenseKey = generateLicenseKey(normalizedTier);
 
-    await prisma.license.upsert({
-      where: { userId },
-      update: {
-        licenseKey: newLicenseKey,
-        maxDevices,
-      },
-      create: {
-        userId,
-        licenseKey: newLicenseKey,
-        maxDevices,
-      },
-    });
-    console.log(`[License Upgrade] Successfully generated ${normalizedTier.toUpperCase()} key for userId: ${userId}`);
+    const existing = await prisma.license.findUnique({ where: { userId } });
+    if (existing) {
+      await prisma.license.update({
+        where: { userId },
+        data: { maxDevices },
+      });
+    } else {
+      const permanentKey = generateLicenseKey();
+      await prisma.license.create({
+        data: {
+          userId,
+          licenseKey: permanentKey,
+          maxDevices,
+        },
+      });
+    }
+    console.log(`[Subscription Upgrade] Successfully updated tier to ${normalizedTier.toUpperCase()} for userId: ${userId} (Permanent key preserved)`);
   } catch (err) {
-    console.error('[License Upgrade Error]:', err);
+    console.error('[License Update Error]:', err);
   }
 }
 

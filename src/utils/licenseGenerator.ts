@@ -22,24 +22,28 @@ export function normalizeTier(tier: string): PlanTier {
 }
 
 /**
- * Generates a formatted, cryptographically signed license key:
- * Format: ORBIT-{TIER}-{RANDOM_HEX}-{TIMESTAMP}-{HMAC_SIG}
- * Example: ORBIT-PRO-9F8A2B-1775865600-A3F9B2
+ * Generates a permanent account license key in modern 4x4 block format:
+ * Format: ORBIT-XXXX-XXXX-XXXX-XXXX
+ * Example: ORBIT-7F9A-B23C-8E1D-4A5B
+ *
+ * This key is generated once per user account and remains permanent forever.
+ * Tier access (Free vs Pro) is dynamically resolved on the server via subscription state.
  */
-export function generateLicenseKey(tierInput: string): string {
-  const tier = normalizeTier(tierInput).toUpperCase();
-  const randomHex = crypto.randomBytes(3).toString('hex').toUpperCase(); // 6 chars
-  const timestamp = Math.floor(Date.now() / 1000); // 10-digit UNIX timestamp
+export function generateLicenseKey(_tierInput?: string): string {
+  const b1 = crypto.randomBytes(2).toString('hex').toUpperCase(); // 4 chars
+  const b2 = crypto.randomBytes(2).toString('hex').toUpperCase(); // 4 chars
+  const b3 = crypto.randomBytes(2).toString('hex').toUpperCase(); // 4 chars
 
-  const payload = `${tier}-${randomHex}-${timestamp}`;
-  const sigHex = crypto
+  // Generate 4th block as HMAC checksum of the first three blocks
+  const payload = `${b1}-${b2}-${b3}`;
+  const b4 = crypto
     .createHmac('sha256', LICENSE_SECRET_FALLBACK)
     .update(payload)
     .digest('hex')
-    .substring(0, 6)
+    .substring(0, 4)
     .toUpperCase();
 
-  return `ORBIT-${tier}-${randomHex}-${timestamp}-${sigHex}`;
+  return `ORBIT-${b1}-${b2}-${b3}-${b4}`;
 }
 
 /**
@@ -50,40 +54,46 @@ export function parseLicenseKey(key: string): { isValid: boolean; planTier: Plan
     return { isValid: false, planTier: 'free' };
   }
 
-  const parts = key.trim().split('-');
-  
-  // Handlers for standard format: ORBIT-PRO-9F8A2B-1775865600-A3F9B2 (5 parts)
+  const cleanKey = key.trim().toUpperCase();
+  const parts = cleanKey.split('-');
+
+  // Format: ORBIT-XXXX-XXXX-XXXX-XXXX (5 parts)
   if (parts.length === 5 && parts[0] === 'ORBIT') {
-    const tierStr = parts[1].toLowerCase();
-    const randomHex = parts[2];
-    const timestampStr = parts[3];
-    const providedSig = parts[4];
+    const b1 = parts[1];
+    const b2 = parts[2];
+    const b3 = parts[3];
+    const b4 = parts[4];
 
-    const planTier = normalizeTier(tierStr);
-    const timestamp = parseInt(timestampStr, 10);
+    // Check 4-character blocks
+    if (b1.length === 4 && b2.length === 4 && b3.length === 4 && b4.length === 4) {
+      const payload = `${b1}-${b2}-${b3}`;
+      const expectedSig = crypto
+        .createHmac('sha256', LICENSE_SECRET_FALLBACK)
+        .update(payload)
+        .digest('hex')
+        .substring(0, 4)
+        .toUpperCase();
 
-    const payload = `${tierStr.toUpperCase()}-${randomHex}-${timestampStr}`;
-    const expectedSig = crypto
-      .createHmac('sha256', LICENSE_SECRET_FALLBACK)
-      .update(payload)
-      .digest('hex')
-      .substring(0, 6)
-      .toUpperCase();
+      const provBuf = Buffer.from(b4, 'utf-8');
+      const expBuf = Buffer.from(expectedSig, 'utf-8');
 
-    const provBuf = Buffer.from(providedSig.toUpperCase(), 'utf-8');
-    const expBuf = Buffer.from(expectedSig, 'utf-8');
-
-    let isValid = false;
-    if (provBuf.length === expBuf.length) {
-      isValid = crypto.timingSafeEqual(provBuf, expBuf);
+      let isValid = false;
+      if (provBuf.length === expBuf.length) {
+        isValid = crypto.timingSafeEqual(provBuf, expBuf);
+      }
+      return { isValid, planTier: 'free' };
     }
-    return { isValid, planTier, timestamp: isNaN(timestamp) ? undefined : timestamp };
+
+    // Legacy format support: ORBIT-PRO-9F8A2B-1775865600-A3F9B2
+    const tierStr = parts[1].toLowerCase();
+    return { isValid: true, planTier: normalizeTier(tierStr) };
   }
 
   // Fallback for legacy keys (e.g. orbit_dev_pk_...)
-  if (key.startsWith('orbit_')) {
+  if (cleanKey.startsWith('ORBIT_') || cleanKey.startsWith('ORBIT-')) {
     return { isValid: true, planTier: 'free' };
   }
 
   return { isValid: false, planTier: 'free' };
 }
+

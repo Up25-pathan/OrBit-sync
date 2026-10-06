@@ -60,10 +60,10 @@ const resolveClientUrl = (req: Request): string => {
   return dynamicUrl || process.env.CLIENT_URL || 'http://localhost:3000';
 };
 
-// Helper to provision default license and subscription for new users
+// Helper to provision permanent single account license and default subscription for new users
 async function provisionUserDefaultResources(tx: any, userId: string) {
-  // Generate formatted default Free Tier license key (ORBIT-FREE-XXXXXX-TIMESTAMP-SIG)
-  const licenseKey = generateLicenseKey('free');
+  // Generate permanent 4x4 block Account License Key (ORBIT-7F9A-B23C-8E1D-4A5B)
+  const licenseKey = generateLicenseKey();
 
   await tx.license.create({
     data: {
@@ -73,7 +73,7 @@ async function provisionUserDefaultResources(tx: any, userId: string) {
     },
   });
 
-  // Create free Community subscription active for 1 year
+  // Create default free subscription active for 1 year
   const expiresAt = new Date();
   expiresAt.setFullYear(expiresAt.getFullYear() + 1);
 
