@@ -54,6 +54,8 @@ const stripe = stripeSecretKey ? new Stripe(stripeSecretKey, { apiVersion: '2024
 const paypalClientId = process.env.PAYPAL_CLIENT_ID || '';
 
 
+import { sendPaymentReceiptEmail } from '../utils/mailer';
+
 // ----------------------------------------------------
 // SECTION A: RAZORPAY GATEWAY API CONTROLLERS
 // ----------------------------------------------------
@@ -62,8 +64,8 @@ const paypalClientId = process.env.PAYPAL_CLIENT_ID || '';
 router.post('/razorpay/order', authenticateJWT, async (req: AuthRequest, res: Response) => {
   try {
     const userId = req.user?.id;
-    const { planTier } = req.body;
-    console.log('[Razorpay Order] Request from userId:', userId, 'for plan:', planTier);
+    const { planTier, currency = 'USD', couponCode } = req.body;
+    console.log('[Razorpay Order] Request from userId:', userId, 'for plan:', planTier, 'currency:', currency, 'coupon:', couponCode);
 
     if (!userId) {
       return res.status(401).json({ error: 'Unauthorized.' });
@@ -73,8 +75,16 @@ router.post('/razorpay/order', authenticateJWT, async (req: AuthRequest, res: Re
       return res.status(400).json({ error: 'Invalid plan tier.' });
     }
 
-    const amountInPaisa = planTier === 'mesh' ? 240000 : 75000;
-    const currency = 'INR';
+    const orderCurrency = currency === 'INR' ? 'INR' : 'USD';
+    const isINR = orderCurrency === 'INR';
+
+    // Minor subunits: Paise for INR (₹1 = 100 paise), Cents for USD ($1 = 100 cents)
+    const baseSubunits = isINR
+      ? (planTier === 'mesh' ? 240000 : 75000)  // ₹2,400 / ₹750
+      : (planTier === 'mesh' ? 2900 : 900);     // $29 / $9
+
+    const discount = couponCode?.toUpperCase() === 'ORBIT20' ? 0.2 : 0;
+    const amountSubunits = Math.round(baseSubunits * (1 - discount));
 
     const user = await prisma.user.findUnique({
       where: { id: userId },
@@ -89,10 +99,10 @@ router.post('/razorpay/order', authenticateJWT, async (req: AuthRequest, res: Re
     }
 
     const order = await razorpay.orders.create({
-      amount: amountInPaisa,
-      currency,
+      amount: amountSubunits,
+      currency: orderCurrency,
       receipt: `rcpt_${userId.substring(0, 8)}_${Date.now()}`,
-      notes: { userId, planTier },
+      notes: { userId, planTier, currency: orderCurrency, couponCode: couponCode || '' },
     });
 
     return res.status(200).json({
@@ -118,7 +128,8 @@ router.post('/razorpay/verify', authenticateJWT, async (req: AuthRequest, res: R
       razorpay_payment_id, 
       razorpay_order_id, 
       razorpay_signature, 
-      planTier
+      planTier,
+      currency = 'USD'
     } = req.body;
 
     if (!userId) {
@@ -163,6 +174,26 @@ router.post('/razorpay/verify', authenticateJWT, async (req: AuthRequest, res: R
     });
 
     await updateUserLicense(userId, planTier);
+
+    const isINR = currency === 'INR';
+    const displayAmount = isINR
+      ? (planTier === 'mesh' ? '₹2,400' : '₹750')
+      : (planTier === 'mesh' ? '$29' : '$9');
+
+    // Asynchronously dispatch payment receipt email
+    prisma.user.findUnique({
+      where: { id: userId },
+      include: { license: true },
+    }).then((userWithLicense) => {
+      if (userWithLicense?.email) {
+        sendPaymentReceiptEmail(userWithLicense.email, {
+          planTier: planTier === 'mesh' ? 'Mesh Cluster Tier' : 'Developer Pro Tier',
+          amount: displayAmount,
+          paymentId: razorpay_payment_id,
+          licenseKey: userWithLicense.license?.licenseKey || '',
+        }).catch((e) => console.error('[Mailer Receipt Error]:', e));
+      }
+    }).catch((err) => console.error('[Receipt User Query Error]:', err));
 
     return res.status(200).json({ status: 'SUCCESS' });
 
