@@ -1,5 +1,5 @@
 // OrBit Security - Centralized Resend Email Dispatcher
-const DEFAULT_SENDER = 'OrBit Security <security@orbit-sync.dev>';
+const DEFAULT_SENDER = 'OrBit Security <sales@orbit-sync.dev>';
 
 export const sendVerificationEmail = async (targetEmail: string, verificationCode: string) => {
   const resendApiKey = process.env.RESEND_API_KEY || '';
