@@ -210,9 +210,18 @@ app.use((err: any, req: express.Request, res: express.Response, next: express.Ne
   res.status(500).json({ error: 'Internal server error occurred.' });
 });
 
-// Ensure avatarUrl and twoFactorEnabled columns exist (raw SQL fallback for databases)
+// Ensure schema integrity on boot
 async function ensureSchema() {
   try {
+    const isPostgres = process.env.DATABASE_URL?.startsWith('postgres');
+    if (isPostgres) {
+      // PostgreSQL schema is managed by Prisma db push
+      await prisma.$queryRawUnsafe('SELECT 1');
+      console.log('[Schema] PostgreSQL database connection active & verified.');
+      return;
+    }
+
+    // SQLite legacy fallback
     const result = (await prisma.$queryRawUnsafe("PRAGMA table_info('User')")) as Array<{ name: string }>;
     const hasAvatarUrl = result.some((col: { name: string }) => col.name === 'avatarUrl');
     if (!hasAvatarUrl) {
@@ -282,11 +291,12 @@ async function ensureSchema() {
 
 // Start Server
 ensureSchema().then(() => {
+  const isPostgres = process.env.DATABASE_URL?.startsWith('postgres');
   const server = app.listen(PORT, () => {
     console.log(`=============================================`);
     console.log(` OrBit API Server running on port ${PORT}`);
     console.log(` Client Origin: ${process.env.CLIENT_URL || 'http://localhost:3000'}`);
-    console.log(` SQLite Database: Active`);
+    console.log(` Database: ${isPostgres ? 'PostgreSQL (Aiven Cloud)' : 'SQLite'}`);
     console.log(`=============================================`);
   });
 
