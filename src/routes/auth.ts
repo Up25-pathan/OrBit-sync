@@ -87,7 +87,7 @@ async function provisionUserDefaultResources(tx: any, userId: string) {
   });
 }
 
-import { sendVerificationEmail, sendTwoFactorOtpEmail } from '../utils/mailer';
+import { sendVerificationEmail, sendTwoFactorOtpEmail, sendForgotPasswordOtpEmail } from '../utils/mailer';
 
 // ----------------------------------------------------
 // SECTION A: EMAIL & PASSWORD REGISTRATION WITH OTP
@@ -453,6 +453,110 @@ router.post('/login', rateLimit(10, 60000), async (req: Request, res: Response) 
     return res.status(500).json({ error: 'Internal server error during login.' });
   }
 });
+
+// ----------------------------------------------------
+// SECTION F: FORGOT & RESET PASSWORD VIA OTP
+// ----------------------------------------------------
+
+// POST /api/auth/forgot-password/request-otp
+router.post('/forgot-password/request-otp', rateLimit(5, 60000), async (req: Request, res: Response) => {
+  try {
+    const { email } = req.body;
+
+    if (!email) {
+      return res.status(400).json({ error: 'Email address is required.' });
+    }
+
+    const cleanEmail = email.trim().toLowerCase();
+
+    const user = await prisma.user.findUnique({
+      where: { email: cleanEmail },
+    });
+
+    if (!user) {
+      return res.status(404).json({ error: 'No account registered with this email address.' });
+    }
+
+    const code = crypto.randomInt(100000, 1000000).toString();
+    const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes expiry
+
+    await prisma.user.update({
+      where: { id: user.id },
+      data: {
+        verificationCode: code,
+        verificationExpires: expiresAt,
+      },
+    });
+
+    sendForgotPasswordOtpEmail(cleanEmail, code).catch((err) => {
+      console.error('[Background Forgot Password Dispatch Error]:', err);
+    });
+
+    return res.status(200).json({
+      status: 'CODE_SENT',
+      email: cleanEmail,
+      message: 'A 6-digit password reset code has been dispatched to your email.',
+    });
+  } catch (error: any) {
+    console.error('Forgot password request OTP error:', error);
+    return res.status(500).json({ error: 'Failed to process password reset request.' });
+  }
+});
+
+// POST /api/auth/forgot-password/reset
+router.post('/forgot-password/reset', rateLimit(5, 60000), async (req: Request, res: Response) => {
+  try {
+    const { email, code, newPassword } = req.body;
+
+    if (!email || !code || !newPassword) {
+      return res.status(400).json({ error: 'Email, verification code, and new password are required.' });
+    }
+
+    const cleanEmail = email.trim().toLowerCase();
+    const cleanCode = code.toString().trim();
+    const cleanNewPass = String(newPassword).trim();
+
+    if (cleanNewPass.length < 6) {
+      return res.status(400).json({ error: 'New password must be at least 6 characters long.' });
+    }
+
+    const user = await prisma.user.findUnique({
+      where: { email: cleanEmail },
+    });
+
+    if (!user) {
+      return res.status(404).json({ error: 'Account not found.' });
+    }
+
+    if (!user.verificationCode || user.verificationCode !== cleanCode) {
+      return res.status(400).json({ error: 'Invalid verification code. Please check your email.' });
+    }
+
+    if (user.verificationExpires && user.verificationExpires < new Date()) {
+      return res.status(400).json({ error: 'Verification code has expired. Please request a new one.' });
+    }
+
+    const newPasswordHash = hashPassword(cleanNewPass);
+
+    await prisma.user.update({
+      where: { id: user.id },
+      data: {
+        passwordHash: newPasswordHash,
+        verificationCode: null,
+        verificationExpires: null,
+      },
+    });
+
+    return res.status(200).json({
+      status: 'PASSWORD_RESET_SUCCESS',
+      message: 'Password reset successfully! You can now log in with your new password.',
+    });
+  } catch (error: any) {
+    console.error('Password reset confirmation error:', error);
+    return res.status(500).json({ error: 'Failed to reset password.' });
+  }
+});
+
 
 
 // ----------------------------------------------------
