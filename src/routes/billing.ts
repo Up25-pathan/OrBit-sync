@@ -86,6 +86,11 @@ router.post('/razorpay/order', authenticateJWT, async (req: AuthRequest, res: Re
     const discount = couponCode?.toUpperCase() === 'ORBIT20' ? 0.2 : 0;
     const amountSubunits = Math.round(baseSubunits * (1 - discount));
 
+    // Razorpay requires minimum transaction of 100 paise / 100 cents
+    if (amountSubunits < 100) {
+      return res.status(400).json({ error: 'Minimum transaction amount is 100 subunits.' });
+    }
+
     const user = await prisma.user.findUnique({
       where: { id: userId },
     });
@@ -106,7 +111,6 @@ router.post('/razorpay/order', authenticateJWT, async (req: AuthRequest, res: Re
     });
 
     return res.status(200).json({
-      isSandbox: false,
       keyId: razorpayKeyId,
       orderId: order.id,
       amount: order.amount,
@@ -118,6 +122,13 @@ router.post('/razorpay/order', authenticateJWT, async (req: AuthRequest, res: Re
     console.error('Razorpay order error:', error);
     return res.status(500).json({ error: 'Failed to create Razorpay order.' });
   }
+});
+
+// Alias for standard integration: POST /api/billing/create-order
+router.post('/create-order', authenticateJWT, async (req: AuthRequest, res: Response) => {
+  // Delegate directly to order route logic
+  req.url = '/razorpay/order';
+  (router as any).handle(req, res);
 });
 
 // POST /api/billing/razorpay/verify
@@ -134,6 +145,10 @@ router.post('/razorpay/verify', authenticateJWT, async (req: AuthRequest, res: R
 
     if (!userId) {
       return res.status(401).json({ error: 'Unauthorized.' });
+    }
+
+    if (!razorpay_payment_id || !razorpay_order_id || !razorpay_signature) {
+      return res.status(400).json({ error: 'Missing required Razorpay payment verification fields.' });
     }
 
     // Cryptographic signature check (constant-time comparison)
@@ -201,6 +216,13 @@ router.post('/razorpay/verify', authenticateJWT, async (req: AuthRequest, res: R
     console.error('Razorpay verify error:', error);
     return res.status(500).json({ error: 'Signature verification failed.' });
   }
+});
+
+// Alias for standard integration: POST /api/billing/verify-payment
+router.post('/verify-payment', authenticateJWT, async (req: AuthRequest, res: Response) => {
+  // Delegate directly to verify route logic
+  req.url = '/razorpay/verify';
+  (router as any).handle(req, res);
 });
 
 
