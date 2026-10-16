@@ -754,6 +754,45 @@ router.post('/control-server/sweep', requireAdmin, async (req: AdminAuthRequest,
   }
 });
 
+// POST /api/v1/admin/control-server/purge-data
+router.post('/control-server/purge-data', requireAdmin, async (req: AdminAuthRequest, res: Response) => {
+  const controlServerUrl = process.env.CONTROL_SERVER_URL || 'https://orbit-server-xbr5.onrender.com';
+  const serverSecret = process.env.CONTROL_SERVER_SECRET || 'orbit-control-server-verification-secret-2026';
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 6000);
+
+  try {
+    const csRes = await fetch(`${controlServerUrl}/api/v1/system/purge-data`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Control-Server-Secret': serverSecret,
+      },
+      signal: controller.signal,
+    });
+    clearTimeout(timeout);
+
+    if (csRes.ok) {
+      const data: any = await csRes.json().catch(() => ({ status: 'success' }));
+      return res.status(200).json({ 
+        status: 'success', 
+        message: data.message || 'Control Server users and projects cleared successfully!' 
+      });
+    }
+
+    const errData: any = await csRes.json().catch(() => ({}));
+    return res.status(csRes.status || 500).json({ 
+      error: errData.error || `Control Server responded with status ${csRes.status}` 
+    });
+  } catch (err: any) {
+    clearTimeout(timeout);
+    return res.status(500).json({ 
+      error: err.message || 'Failed to connect to Control Server endpoint.' 
+    });
+  }
+});
+
+
 // -------------------------------------------------------------
 // TELEMETRY, CRASH DUMPS & SERVER ERRORS (ADMIN ENDPOINTS)
 // -------------------------------------------------------------
