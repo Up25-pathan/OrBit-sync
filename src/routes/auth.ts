@@ -87,7 +87,7 @@ async function provisionUserDefaultResources(tx: any, userId: string) {
   });
 }
 
-import { sendVerificationEmail, sendTwoFactorOtpEmail, sendForgotPasswordOtpEmail } from '../utils/mailer';
+import { sendVerificationEmail, sendTwoFactorOtpEmail, sendForgotPasswordOtpEmail, sendEnterpriseOtpEmail } from '../utils/mailer';
 
 // ----------------------------------------------------
 // SECTION A: EMAIL & PASSWORD REGISTRATION WITH OTP
@@ -776,7 +776,7 @@ router.get('/me', async (req: Request, res: Response) => {
     if (authHeader && authHeader.startsWith('Bearer ')) {
       token = authHeader.substring(7);
     } else if (req.headers.cookie) {
-      const cookies = req.headers.cookie.split(';').reduce((acc: any, c) => {
+      const cookies = req.headers.cookie.split(';').reduce((acc: any, c: string) => {
         const parts = c.trim().split('=');
         if (parts[0]) acc[parts[0]] = parts.slice(1).join('=');
         return acc;
@@ -820,6 +820,642 @@ router.get('/me', async (req: Request, res: Response) => {
     return res.status(401).json({ error: 'Unauthorized profile access.' });
   }
 });
+
+// -------------------------------------------------------------
+// SECTION G: ENTERPRISE ORGANIZATION REGISTRATION & SMART LOGIN
+// -------------------------------------------------------------
+
+const CONSUMER_EMAIL_DOMAINS = new Set([
+  'gmail.com', 'googlemail.com', 'yahoo.com', 'yahoo.co.uk', 'yahoo.co.in',
+  'hotmail.com', 'outlook.com', 'live.com', 'msn.com', 'icloud.com',
+  'me.com', 'mac.com', 'aol.com', 'proton.me', 'protonmail.com',
+  'zoho.com', 'yandex.com', 'mail.com', 'gmx.com', 'fastmail.com'
+]);
+
+function extractDomain(email: string): string {
+  const parts = email.trim().toLowerCase().split('@');
+  return parts.length > 1 ? parts[1] : '';
+}
+
+// POST /api/auth/enterprise/check-domain
+router.post('/enterprise/check-domain', async (req: Request, res: Response) => {
+  try {
+    const { email } = req.body;
+    if (!email || !email.includes('@')) {
+      return res.status(400).json({ error: 'Valid email address is required.' });
+    }
+
+    const domain = extractDomain(email);
+    if (CONSUMER_EMAIL_DOMAINS.has(domain)) {
+      return res.status(400).json({
+        validCorporate: false,
+        domain,
+        error: 'Personal email providers (@gmail, @yahoo, etc.) cannot be used for Organization onboarding. Please use your corporate work email.',
+      });
+    }
+
+    // Check if an enterprise application or organization exists with this domain
+    const existing = await (prisma as any).enterpriseApplication.findFirst({
+      where: {
+        OR: [
+          { companyDomain: domain },
+          { workEmail: { endsWith: `@${domain}` } },
+        ],
+      },
+    });
+
+    return res.status(200).json({
+      validCorporate: true,
+      domain,
+      exists: !!existing,
+      companyName: existing ? existing.companyName : null,
+      status: existing ? existing.status : null,
+      authPreference: existing ? existing.authPreference : 'otp',
+    });
+  } catch (err: any) {
+    console.error('Check domain error:', err);
+    return res.status(500).json({ error: 'Failed to verify organization domain.' });
+  }
+});
+
+// POST /api/auth/enterprise/send-signup-otp
+router.post('/enterprise/send-signup-otp', rateLimit(5, 60000), async (req: Request, res: Response) => {
+  try {
+    const { companyName, workEmail, adminName } = req.body;
+
+    if (!workEmail || !workEmail.includes('@')) {
+      return res.status(400).json({ error: 'Corporate work email is required.' });
+    }
+
+    const cleanEmail = workEmail.trim().toLowerCase();
+    const domain = extractDomain(cleanEmail);
+
+    if (CONSUMER_EMAIL_DOMAINS.has(domain)) {
+      return res.status(400).json({
+        error: 'Personal email providers (@gmail, @yahoo, etc.) are strictly prohibited. Please provide your corporate email domain.',
+      });
+    }
+
+    // Check if this enterprise application was already approved
+    const existingApp = await (prisma as any).enterpriseApplication.findUnique({
+      where: { workEmail: cleanEmail },
+    });
+
+    if (existingApp && existingApp.status === 'APPROVED') {
+      return res.status(409).json({
+        error: 'An active approved Organization already exists for this work email. Please sign in instead.',
+        status: existingApp.status,
+      });
+    }
+
+    // Generate 6-digit OTP code
+    const code = crypto.randomInt(100000, 1000000).toString();
+    const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
+
+    const existingUser = await prisma.user.findUnique({ where: { email: cleanEmail } });
+
+    if (existingUser) {
+      await prisma.user.update({
+        where: { id: existingUser.id },
+        data: {
+          verificationCode: code,
+          verificationExpires: expiresAt,
+          displayName: adminName ? adminName.trim() : existingUser.displayName,
+        },
+      });
+    } else {
+      // Create user record in unverified state
+      await prisma.user.create({
+        data: {
+          email: cleanEmail,
+          displayName: adminName ? adminName.trim() : cleanEmail.split('@')[0],
+          passwordHash: hashPassword(crypto.randomBytes(32).toString('hex')),
+          isVerified: false,
+          role: 'ADMIN',
+          verificationCode: code,
+          verificationExpires: expiresAt,
+        },
+      });
+    }
+
+    // Send Enterprise OTP Email
+    sendEnterpriseOtpEmail(cleanEmail, code, (companyName || 'Your Organization').trim(), false).catch((err) => {
+      console.error('[Enterprise OTP Mailer Error]:', err);
+    });
+
+    return res.status(200).json({
+      success: true,
+      status: 'OTP_SENT',
+      email: cleanEmail,
+      message: 'A 6-digit cryptographic verification code has been dispatched to your corporate work email.',
+    });
+  } catch (err: any) {
+    console.error('Enterprise send-signup-otp error:', err);
+    return res.status(500).json({ error: 'Failed to dispatch enterprise verification code.' });
+  }
+});
+
+// POST /api/auth/enterprise/verify-signup-otp
+router.post('/enterprise/verify-signup-otp', rateLimit(10, 60000), async (req: Request, res: Response) => {
+  try {
+    const {
+      code,
+      workEmail,
+      companyName,
+      companyDomain,
+      teamScale,
+      industry,
+      deploymentModel,
+      adminName,
+      adminRole,
+      country,
+      useCaseDetails,
+    } = req.body;
+
+    if (!workEmail || !code) {
+      return res.status(400).json({ error: 'Work email and 6-digit verification code are required.' });
+    }
+
+    const cleanEmail = workEmail.trim().toLowerCase();
+    const cleanCode = String(code).trim();
+    const domain = (companyDomain || extractDomain(cleanEmail)).trim().toLowerCase().replace(/^https?:\/\//, '').replace(/\/.*$/, '');
+
+    const user = await prisma.user.findUnique({
+      where: { email: cleanEmail },
+      include: { license: true, subscription: true },
+    });
+
+    if (!user) {
+      return res.status(404).json({ error: 'Registration session not found. Please restart sign-up.' });
+    }
+
+    // Validate OTP Code
+    if (!user.verificationCode || user.verificationCode !== cleanCode) {
+      return res.status(400).json({ error: 'Invalid verification code. Please check your email.' });
+    }
+
+    // Validate Expiration
+    if (user.verificationExpires && user.verificationExpires < new Date()) {
+      return res.status(400).json({ error: 'Verification code has expired. Please request a new one.' });
+    }
+
+    // Calculate Enterprise seat quota based on scale
+    let maxDevices = 25;
+    if (teamScale === '26-100') maxDevices = 100;
+    else if (teamScale === '101-500') maxDevices = 500;
+    else if (teamScale === '500+') maxDevices = 1000;
+
+    // Activate User
+    const updatedUser = await prisma.user.update({
+      where: { id: user.id },
+      data: {
+        isVerified: true,
+        role: 'ADMIN',
+        displayName: adminName ? adminName.trim() : user.displayName,
+        verificationCode: null,
+        verificationExpires: null,
+      },
+    });
+
+    // Provision Enterprise License (Status: pending_approval)
+    let userLicense = user.license;
+    if (!userLicense) {
+      const licenseKey = generateLicenseKey('enterprise');
+      userLicense = await prisma.license.create({
+        data: {
+          userId: updatedUser.id,
+          licenseKey,
+          maxDevices,
+        },
+      });
+    }
+
+    // Provision Enterprise Subscription (Status: pending_approval)
+    let userSub = user.subscription;
+    if (!userSub) {
+      userSub = await prisma.subscription.create({
+        data: {
+          userId: updatedUser.id,
+          planTier: 'enterprise',
+          status: 'pending_approval',
+          amountPaid: 0,
+          expiresAt: new Date(Date.now() + 365 * 24 * 60 * 60 * 1000),
+        },
+      });
+    }
+
+    // Create or update Enterprise Application
+    let application = await (prisma as any).enterpriseApplication.findUnique({
+      where: { workEmail: cleanEmail },
+    });
+
+    if (!application) {
+      application = await (prisma as any).enterpriseApplication.create({
+        data: {
+          companyName: (companyName || 'Organization').trim(),
+          workEmail: cleanEmail,
+          companyDomain: domain,
+          teamScale: teamScale || '26-100',
+          industry: industry || 'Software/SaaS',
+          deploymentModel: deploymentModel || 'hybrid',
+          adminName: (adminName || cleanEmail.split('@')[0]).trim(),
+          adminRole: adminRole || 'Engineering Lead',
+          authPreference: 'otp',
+          country: country || 'US',
+          useCaseDetails: useCaseDetails || '',
+          status: 'PENDING_APPROVAL',
+          adminUserId: updatedUser.id,
+        },
+      });
+    } else {
+      application = await (prisma as any).enterpriseApplication.update({
+        where: { id: application.id },
+        data: {
+          adminUserId: updatedUser.id,
+          companyName: companyName ? companyName.trim() : application.companyName,
+          companyDomain: domain,
+          teamScale: teamScale || application.teamScale,
+          industry: industry || application.industry,
+          deploymentModel: deploymentModel || application.deploymentModel,
+          adminName: adminName ? adminName.trim() : application.adminName,
+          adminRole: adminRole || application.adminRole,
+          country: country || application.country,
+          authPreference: 'otp',
+        },
+      });
+    }
+
+    // Issue Session Token & Set Cookie
+    const token = signToken({ id: updatedUser.id, email: updatedUser.email });
+    res.cookie('orbit_session', token, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'lax',
+      maxAge: 7 * 24 * 60 * 60 * 1000,
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: 'Organization registered. Enterprise license key provisioned and pending administrative security approval.',
+      token,
+      user: {
+        id: updatedUser.id,
+        email: updatedUser.email,
+        displayName: updatedUser.displayName,
+        role: updatedUser.role,
+        planTier: 'enterprise',
+        licenseKey: userLicense.licenseKey,
+      },
+      application: {
+        id: application.id,
+        companyName: application.companyName,
+        companyDomain: application.companyDomain,
+        workEmail: application.workEmail,
+        teamScale: application.teamScale,
+        status: application.status,
+        licenseKey: userLicense.licenseKey,
+      },
+    });
+  } catch (err: any) {
+    console.error('Enterprise verify-signup-otp error:', err);
+    return res.status(500).json({ error: 'Failed to verify code and provision organization.' });
+  }
+});
+
+// POST /api/auth/enterprise/send-login-otp
+router.post('/enterprise/send-login-otp', rateLimit(5, 60000), async (req: Request, res: Response) => {
+  try {
+    const { workEmail } = req.body;
+
+    if (!workEmail || !workEmail.includes('@')) {
+      return res.status(400).json({ error: 'Valid corporate work email is required.' });
+    }
+
+    const cleanEmail = workEmail.trim().toLowerCase();
+    const domain = extractDomain(cleanEmail);
+
+    if (CONSUMER_EMAIL_DOMAINS.has(domain)) {
+      return res.status(400).json({
+        error: 'Personal email providers (@gmail, @yahoo, etc.) cannot be used for Organization login.',
+      });
+    }
+
+    // Look for matching user and/or enterprise application
+    const user = await prisma.user.findUnique({ where: { email: cleanEmail } });
+    const app = await (prisma as any).enterpriseApplication.findFirst({
+      where: {
+        OR: [
+          { workEmail: cleanEmail },
+          ...(user ? [{ adminUserId: user.id }] : []),
+        ],
+      },
+    });
+
+    if (!user && !app) {
+      return res.status(404).json({
+        error: 'No Enterprise organization found associated with this work email. Please register your organization first.',
+      });
+    }
+
+    // Generate 6-digit OTP code
+    const code = crypto.randomInt(100000, 1000000).toString();
+    const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
+
+    let targetUserId = user ? user.id : null;
+    if (!user) {
+      // If user doesn't exist yet but application does, create the user
+      const newUser = await prisma.user.create({
+        data: {
+          email: cleanEmail,
+          displayName: app?.adminName || cleanEmail.split('@')[0],
+          passwordHash: hashPassword(crypto.randomBytes(32).toString('hex')),
+          isVerified: false,
+          role: 'ADMIN',
+          verificationCode: code,
+          verificationExpires: expiresAt,
+        },
+      });
+      targetUserId = newUser.id;
+      if (app && !app.adminUserId) {
+        await (prisma as any).enterpriseApplication.update({
+          where: { id: app.id },
+          data: { adminUserId: newUser.id },
+        });
+      }
+    } else {
+      await prisma.user.update({
+        where: { id: user.id },
+        data: {
+          verificationCode: code,
+          verificationExpires: expiresAt,
+        },
+      });
+    }
+
+    // Send Enterprise Login OTP Email
+    const companyName = app?.companyName || 'Your Organization';
+    sendEnterpriseOtpEmail(cleanEmail, code, companyName, true).catch((err) => {
+      console.error('[Enterprise Login Mailer Error]:', err);
+    });
+
+    return res.status(200).json({
+      success: true,
+      status: 'LOGIN_OTP_SENT',
+      email: cleanEmail,
+      companyName,
+      message: `A 6-digit sign-in code has been dispatched to ${cleanEmail}.`,
+    });
+  } catch (err: any) {
+    console.error('Enterprise send-login-otp error:', err);
+    return res.status(500).json({ error: 'Failed to send enterprise login code.' });
+  }
+});
+
+// POST /api/auth/enterprise/verify-login-otp
+router.post('/enterprise/verify-login-otp', rateLimit(10, 60000), async (req: Request, res: Response) => {
+  try {
+    const { workEmail, code } = req.body;
+
+    if (!workEmail || !code) {
+      return res.status(400).json({ error: 'Work email and 6-digit login code are required.' });
+    }
+
+    const cleanEmail = workEmail.trim().toLowerCase();
+    const cleanCode = String(code).trim();
+
+    const user = await prisma.user.findUnique({
+      where: { email: cleanEmail },
+      include: {
+        license: true,
+        subscription: true,
+      },
+    });
+
+    if (!user) {
+      return res.status(404).json({ error: 'Enterprise user account not found.' });
+    }
+
+    // Validate code
+    if (!user.verificationCode || user.verificationCode !== cleanCode) {
+      return res.status(400).json({ error: 'Invalid login code. Please check your email.' });
+    }
+
+    // Validate expiration
+    if (user.verificationExpires && user.verificationExpires < new Date()) {
+      return res.status(400).json({ error: 'Login code has expired. Please request a new one.' });
+    }
+
+    // Clear OTP code
+    await prisma.user.update({
+      where: { id: user.id },
+      data: {
+        isVerified: true,
+        verificationCode: null,
+        verificationExpires: null,
+      },
+    });
+
+    // Lookup enterprise application
+    const app = await (prisma as any).enterpriseApplication.findFirst({
+      where: {
+        OR: [
+          { workEmail: cleanEmail },
+          { adminUserId: user.id },
+        ],
+      },
+    });
+
+    // Ensure enterprise license exists
+    let licenseKey = user.license?.licenseKey;
+    if (!licenseKey) {
+      const newKey = generateLicenseKey('enterprise');
+      const newLic = await prisma.license.create({
+        data: {
+          userId: user.id,
+          licenseKey: newKey,
+          maxDevices: 100,
+        },
+      });
+      licenseKey = newLic.licenseKey;
+    }
+
+    // Sign session token
+    const token = signToken({ id: user.id, email: user.email });
+    res.cookie('orbit_session', token, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'lax',
+      maxAge: 7 * 24 * 60 * 60 * 1000,
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: 'Enterprise sign-in authorized.',
+      token,
+      user: {
+        id: user.id,
+        email: user.email,
+        displayName: user.displayName || user.email.split('@')[0],
+        avatarUrl: user.avatarUrl || null,
+        role: user.role || 'ADMIN',
+        planTier: normalizeTier(user.subscription?.planTier || 'enterprise'),
+        licenseKey,
+      },
+      enterpriseApplication: app ? {
+        id: app.id,
+        companyName: app.companyName,
+        companyDomain: app.companyDomain,
+        status: app.status,
+      } : null,
+    });
+  } catch (err: any) {
+    console.error('Enterprise verify-login-otp error:', err);
+    return res.status(500).json({ error: 'Failed to verify login code.' });
+  }
+});
+
+// POST /api/auth/enterprise/register (Password Fallback)
+router.post('/enterprise/register', rateLimit(5, 60000), async (req: Request, res: Response) => {
+  try {
+    const {
+      companyName,
+      workEmail,
+      companyDomain,
+      teamScale,
+      industry,
+      deploymentModel,
+      adminName,
+      adminRole,
+      password,
+      authPreference,
+      country,
+      useCaseDetails,
+    } = req.body;
+
+    if (!companyName || !workEmail || !adminName) {
+      return res.status(400).json({ error: 'Company Name, Work Email, and Primary Admin Name are required.' });
+    }
+
+    const cleanEmail = workEmail.trim().toLowerCase();
+    const domain = (companyDomain || extractDomain(cleanEmail)).trim().toLowerCase().replace(/^https?:\/\//, '').replace(/\/.*$/, '');
+
+    if (CONSUMER_EMAIL_DOMAINS.has(domain)) {
+      return res.status(400).json({
+        error: 'Personal email providers (@gmail, @yahoo, etc.) are strictly prohibited for Organization verification. Please submit your official corporate email.',
+      });
+    }
+
+    // Check if already registered
+    const existingApp = await (prisma as any).enterpriseApplication.findUnique({
+      where: { workEmail: cleanEmail },
+    });
+
+    if (existingApp) {
+      return res.status(409).json({
+        error: 'An Organization registration application with this work email is already submitted.',
+        applicationId: existingApp.id,
+        status: existingApp.status,
+      });
+    }
+
+    // Provision or find Admin User
+    let userId: string | null = null;
+    const existingUser = await prisma.user.findUnique({ where: { email: cleanEmail } });
+
+    if (!existingUser && password) {
+      const passwordHash = hashPassword(String(password).trim());
+      const newUser = await prisma.user.create({
+        data: {
+          email: cleanEmail,
+          displayName: adminName.trim(),
+          passwordHash,
+          role: 'ADMIN',
+          isVerified: true,
+        },
+      });
+
+      // Provision enterprise license key and subscription (locked pending approval)
+      const licenseKey = generateLicenseKey('enterprise');
+      await prisma.license.create({
+        data: {
+          userId: newUser.id,
+          licenseKey,
+          maxDevices: 25,
+        },
+      });
+
+      await prisma.subscription.create({
+        data: {
+          userId: newUser.id,
+          planTier: 'enterprise',
+          status: 'pending_approval',
+          amountPaid: 0,
+          expiresAt: new Date(Date.now() + 365 * 24 * 60 * 60 * 1000), // 1 year trial / contract
+        },
+      });
+
+      userId = newUser.id;
+    } else if (existingUser) {
+      userId = existingUser.id;
+    }
+
+    const application = await (prisma as any).enterpriseApplication.create({
+      data: {
+        companyName: companyName.trim(),
+        workEmail: cleanEmail,
+        companyDomain: domain,
+        teamScale: teamScale || '26-100',
+        industry: industry || 'Software/SaaS',
+        deploymentModel: deploymentModel || 'hybrid',
+        adminName: adminName.trim(),
+        adminRole: adminRole || 'Engineering Lead',
+        authPreference: authPreference || 'otp',
+        country: country || 'US',
+        useCaseDetails: useCaseDetails || '',
+        status: 'PENDING_APPROVAL',
+        adminUserId: userId,
+      },
+    });
+
+    // Auto issue token if user was created with password
+    let token = '';
+    if (userId) {
+      token = signToken({ id: userId, email: cleanEmail });
+      res.cookie('orbit_session', token, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'lax',
+        maxAge: 7 * 24 * 60 * 60 * 1000,
+      });
+    }
+
+    // Fetch user license key if available
+    let provisionedKey = '';
+    if (userId) {
+      const userLic = await prisma.license.findUnique({ where: { userId } });
+      if (userLic) provisionedKey = userLic.licenseKey;
+    }
+
+    return res.status(201).json({
+      success: true,
+      message: 'Organization registered. Enterprise license key provisioned and pending administrative security approval.',
+      application: {
+        id: application.id,
+        companyName: application.companyName,
+        companyDomain: application.companyDomain,
+        workEmail: application.workEmail,
+        teamScale: application.teamScale,
+        status: application.status,
+        licenseKey: provisionedKey,
+      },
+      token: token || undefined,
+    });
+  } catch (err: any) {
+    console.error('Enterprise registration error:', err);
+    return res.status(500).json({ error: 'Failed to complete Organization registration. Please try again.' });
+  }
+});
+
 
 // POST /api/auth/logout
 router.post('/logout', (req: Request, res: Response) => {

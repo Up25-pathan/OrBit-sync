@@ -130,3 +130,24 @@ model ServerErrorEvent {
   createdAt  DateTime @default(now())
 }
 
+model EnterpriseApplication {
+  id               String    @id @default(uuid())
+  companyName      String
+  workEmail        String    @unique
+  companyDomain    String
+  teamScale        String    // "5-25", "26-100", "101-500", "500+"
+  industry         String
+  deploymentModel  String    // "hybrid", "air-gapped", "private-vpc", "compliance"
+  adminName        String
+  adminRole        String
+  authPreference   String    @default("sso") // "sso", "email-otp", "oidc"
+  country          String?
+  useCaseDetails   String?
+  status           String    @default("PENDING_APPROVAL") // "PENDING_APPROVAL", "APPROVED", "ACTIVE", "REJECTED"
+  adminUserId      String?
+  approvedAt       DateTime?
+  approvedBy       String?
+  rejectionReason  String?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+}

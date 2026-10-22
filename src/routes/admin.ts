@@ -69,7 +69,7 @@ export async function requireAdmin(req: AdminAuthRequest, res: Response, next: N
     if (authHeader && authHeader.startsWith('Bearer ')) {
       token = authHeader.substring(7);
     } else if (req.headers.cookie) {
-      const cookies = req.headers.cookie.split(';').reduce((acc: any, c) => {
+      const cookies = req.headers.cookie.split(';').reduce((acc: any, c: string) => {
         const parts = c.trim().split('=');
         if (parts[0]) acc[parts[0]] = parts.slice(1).join('=');
         return acc;
@@ -993,6 +993,198 @@ router.delete('/feedback/:id', requireAdmin, async (req: AdminAuthRequest, res: 
   } catch (err: any) {
     console.error('[Admin] Failed to delete feedback ticket:', err);
     return res.status(500).json({ error: 'Failed to delete feedback ticket.' });
+  }
+});
+
+// -------------------------------------------------------------
+// SECTION: ENTERPRISE ORGANIZATIONS AUDIT & SECURITY APPROVALS
+// -------------------------------------------------------------
+
+// GET /api/v1/admin/enterprises
+router.get('/enterprises', requireAdmin, async (req: AdminAuthRequest, res: Response) => {
+  try {
+    const enterprises = await (prisma as any).enterpriseApplication.findMany({
+      orderBy: { createdAt: 'desc' },
+    });
+
+    const populated = await Promise.all(
+      enterprises.map(async (ent: any) => {
+        let licenseKey = null;
+        let subscriptionStatus = null;
+        let user = null;
+
+        if (ent.adminUserId) {
+          user = await prisma.user.findUnique({
+            where: { id: ent.adminUserId },
+            include: { license: true, subscription: true },
+          });
+          if (user?.license) licenseKey = user.license.licenseKey;
+          if (user?.subscription) subscriptionStatus = user.subscription.status;
+        } else {
+          user = await prisma.user.findUnique({
+            where: { email: ent.workEmail },
+            include: { license: true, subscription: true },
+          });
+          if (user?.license) licenseKey = user.license.licenseKey;
+          if (user?.subscription) subscriptionStatus = user.subscription.status;
+        }
+
+        return {
+          ...ent,
+          licenseKey,
+          subscriptionStatus: subscriptionStatus || ent.status,
+          user: user
+            ? {
+                id: user.id,
+                email: user.email,
+                displayName: user.displayName,
+                isVerified: user.isVerified,
+              }
+            : null,
+        };
+      })
+    );
+
+    return res.status(200).json({ enterprises: populated });
+  } catch (err: any) {
+    console.error('[Admin] Failed to fetch enterprises:', err);
+    return res.status(500).json({ error: 'Failed to fetch enterprise organizations.' });
+  }
+});
+
+// POST /api/v1/admin/enterprises/:id/approve
+router.post('/enterprises/:id/approve', requireAdmin, async (req: AdminAuthRequest, res: Response) => {
+  try {
+    const { id } = req.params;
+    const adminEmail = req.adminUser?.email || 'admin@orbit.mesh';
+
+    const enterprise = await (prisma as any).enterpriseApplication.findUnique({
+      where: { id },
+    });
+
+    if (!enterprise) {
+      return res.status(404).json({ error: 'Enterprise application not found.' });
+    }
+
+    const updated = await (prisma as any).enterpriseApplication.update({
+      where: { id },
+      data: {
+        status: 'APPROVED',
+        approvedAt: new Date(),
+        approvedBy: adminEmail,
+        rejectionReason: null,
+      },
+    });
+
+    // Activate the user subscription and unlock the license
+    let targetUserId = enterprise.adminUserId;
+    if (!targetUserId) {
+      const user = await prisma.user.findUnique({ where: { email: enterprise.workEmail } });
+      if (user) targetUserId = user.id;
+    }
+
+    if (targetUserId) {
+      // Activate subscription
+      await prisma.subscription.upsert({
+        where: { userId: targetUserId },
+        update: {
+          planTier: 'enterprise',
+          status: 'active',
+          expiresAt: new Date(Date.now() + 365 * 24 * 60 * 60 * 1000),
+        },
+        create: {
+          userId: targetUserId,
+          planTier: 'enterprise',
+          status: 'active',
+          amountPaid: 0,
+          expiresAt: new Date(Date.now() + 365 * 24 * 60 * 60 * 1000),
+        },
+      });
+
+      // Ensure license exists and has enterprise scale
+      const existingLicense = await prisma.license.findUnique({
+        where: { userId: targetUserId },
+      });
+
+      if (existingLicense) {
+        await prisma.license.update({
+          where: { id: existingLicense.id },
+          data: { maxDevices: 50 },
+        });
+      } else {
+        const key = generateLicenseKey('enterprise');
+        await prisma.license.create({
+          data: {
+            userId: targetUserId,
+            licenseKey: key,
+            maxDevices: 50,
+          },
+        });
+      }
+    }
+
+    console.log(`[CYBER-SECURITY AUDIT] Enterprise Organization APPROVED: "${enterprise.companyName}" (${enterprise.workEmail}) approved by ${adminEmail} at ${new Date().toISOString()}`);
+
+    return res.status(200).json({
+      success: true,
+      message: `Organization "${enterprise.companyName}" approved and Enterprise License activated.`,
+      enterprise: updated,
+    });
+  } catch (err: any) {
+    console.error('[Admin] Failed to approve enterprise application:', err);
+    return res.status(500).json({ error: 'Failed to approve enterprise organization.' });
+  }
+});
+
+// POST /api/v1/admin/enterprises/:id/reject
+router.post('/enterprises/:id/reject', requireAdmin, async (req: AdminAuthRequest, res: Response) => {
+  try {
+    const { id } = req.params;
+    const { reason } = req.body;
+    const adminEmail = req.adminUser?.email || 'admin@orbit.mesh';
+
+    const enterprise = await (prisma as any).enterpriseApplication.findUnique({
+      where: { id },
+    });
+
+    if (!enterprise) {
+      return res.status(404).json({ error: 'Enterprise application not found.' });
+    }
+
+    const updated = await (prisma as any).enterpriseApplication.update({
+      where: { id },
+      data: {
+        status: 'REJECTED',
+        rejectionReason: reason || 'Application did not meet security verification criteria.',
+        approvedAt: new Date(),
+        approvedBy: adminEmail,
+      },
+    });
+
+    // Cancel or lock user subscription
+    let targetUserId = enterprise.adminUserId;
+    if (!targetUserId) {
+      const user = await prisma.user.findUnique({ where: { email: enterprise.workEmail } });
+      if (user) targetUserId = user.id;
+    }
+
+    if (targetUserId) {
+      await prisma.subscription.updateMany({
+        where: { userId: targetUserId },
+        data: { status: 'canceled' },
+      });
+    }
+
+    console.log(`[CYBER-SECURITY AUDIT] Enterprise Organization REJECTED: "${enterprise.companyName}" (${enterprise.workEmail}) rejected by ${adminEmail}. Reason: ${reason}`);
+
+    return res.status(200).json({
+      success: true,
+      message: `Organization "${enterprise.companyName}" application rejected.`,
+      enterprise: updated,
+    });
+  } catch (err: any) {
+    console.error('[Admin] Failed to reject enterprise application:', err);
+    return res.status(500).json({ error: 'Failed to reject enterprise organization.' });
   }
 });
 

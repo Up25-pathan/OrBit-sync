@@ -46,6 +46,16 @@ router.get('/dashboard', authenticateJWT, async (req: AuthRequest, res: Response
       });
     }
 
+    // Check if user is associated with an Enterprise Organization application
+    const enterpriseApp = await (prisma as any).enterpriseApplication.findFirst({
+      where: {
+        OR: [
+          { adminUserId: userId },
+          { workEmail: user.email },
+        ],
+      },
+    });
+
     return res.status(200).json({
       user: {
         email: user.email,
@@ -65,6 +75,22 @@ router.get('/dashboard', authenticateJWT, async (req: AuthRequest, res: Response
             expiresAt: user.subscription.expiresAt,
           }
         : null,
+      enterprise: enterpriseApp
+        ? {
+            id: enterpriseApp.id,
+            companyName: enterpriseApp.companyName,
+            companyDomain: enterpriseApp.companyDomain,
+            teamScale: enterpriseApp.teamScale,
+            industry: enterpriseApp.industry,
+            deploymentModel: enterpriseApp.deploymentModel,
+            adminRole: enterpriseApp.adminRole,
+            status: enterpriseApp.status,
+            approvedAt: enterpriseApp.approvedAt,
+            approvedBy: enterpriseApp.approvedBy,
+            rejectionReason: enterpriseApp.rejectionReason,
+            createdAt: enterpriseApp.createdAt,
+          }
+        : null,
       devices: userLicense.devices
         ? userLicense.devices.map((dev) => ({
             id: dev.id,
@@ -75,16 +101,34 @@ router.get('/dashboard', authenticateJWT, async (req: AuthRequest, res: Response
             lastSeen: new Date(dev.lastSeen).toISOString(),
           }))
         : [],
-      invoices: (user.subscription && user.subscription.planTier !== 'free' && user.subscription.planTier !== 'Free Tier')
-        ? [
+      invoices: (() => {
+        if (user.subscription?.planTier === 'enterprise' || enterpriseApp) {
+          const isApproved = enterpriseApp?.status === 'APPROVED' || user.subscription?.status === 'active';
+          return [
+            {
+              id: `INV-ENT-${new Date(enterpriseApp?.createdAt || user.createdAt).getFullYear()}-001`,
+              date: new Date(enterpriseApp?.createdAt || user.createdAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
+              amount: isApproved ? '$1,200.00 / yr' : '$0.00 (Pilot Review)',
+              status: isApproved ? 'PAID' : 'PENDING',
+              contract: `${enterpriseApp?.companyName || 'Enterprise'} Annual Agreement (${enterpriseApp?.teamScale || '100'} Seats)`,
+            },
+          ];
+        }
+
+        if (user.subscription && user.subscription.planTier !== 'free' && user.subscription.planTier !== 'Free Tier') {
+          return [
             {
               id: `INV-${new Date(user.createdAt).getFullYear()}-001`,
               date: new Date(user.createdAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
               amount: user.subscription.planTier === 'mesh' ? '$24.00' : '$9.00',
               status: user.subscription.status === 'active' ? 'PAID' : 'PENDING',
+              contract: 'Developer Monthly Subscription',
             },
-          ]
-        : [],
+          ];
+        }
+
+        return [];
+      })(),
     });
   } catch (error: any) {
     console.error('Fetch dashboard error:', error);

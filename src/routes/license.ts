@@ -84,6 +84,16 @@ router.get('/verify', async (req: Request, res: Response) => {
     }
 
     const user = license.user;
+
+    // Security check: Reject locked or pending-approval enterprise licenses
+    if (user.subscription?.status === 'pending_approval' || (user.subscription?.planTier === 'enterprise' && user.subscription?.status !== 'active')) {
+      return res.status(403).json({
+        valid: false,
+        status: 'PENDING_APPROVAL',
+        error: 'Enterprise license key is locked pending OrBit administrative approval and security clearance.',
+      });
+    }
+
     const { planTier, expiresAt, amountPaid } = resolveEffectiveSubscription(user.subscription);
     const displayName = user.displayName || user.email.split('@')[0];
 
@@ -145,6 +155,16 @@ router.post('/verify', async (req: Request, res: Response) => {
     }
 
     const user = license.user;
+
+    // Security check: Reject locked or pending-approval enterprise licenses
+    if (user.subscription?.status === 'pending_approval' || (user.subscription?.planTier === 'enterprise' && user.subscription?.status !== 'active')) {
+      return res.status(403).json({
+        valid: false,
+        status: 'PENDING_APPROVAL',
+        error: 'Enterprise license key is locked pending OrBit administrative approval and security clearance.',
+      });
+    }
+
     const { planTier, expiresAt, amountPaid } = resolveEffectiveSubscription(user.subscription);
     const displayName = user.displayName || user.email.split('@')[0];
 
@@ -185,6 +205,16 @@ async function handleDeviceHandshake(req: Request, res: Response) {
 
     if (!license) {
       return res.status(404).json({ status: 'INVALID', message: 'License key provided is invalid.' });
+    }
+
+    if (
+      license.user.subscription?.status === 'pending_approval' ||
+      (license.user.subscription?.planTier === 'enterprise' && license.user.subscription?.status !== 'active')
+    ) {
+      return res.status(403).json({
+        status: 'PENDING_APPROVAL',
+        message: 'This Enterprise license is awaiting administrative security verification and approval before nodes can be activated.',
+      });
     }
 
     const { planTier, expiresAt, amountPaid } = resolveEffectiveSubscription(license.user.subscription);
