@@ -33,8 +33,20 @@ router.get('/dashboard', authenticateJWT, async (req: AuthRequest, res: Response
       return res.status(404).json({ error: 'User not found.' });
     }
 
+    // Check if user is associated with an Enterprise Organization application
+    const enterpriseApp = await (prisma as any).enterpriseApplication.findFirst({
+      where: {
+        OR: [
+          { adminUserId: userId },
+          { workEmail: user.email },
+        ],
+      },
+    });
+
+    const isEnterprisePending = enterpriseApp && (enterpriseApp.status === 'PENDING_APPROVAL' || user.subscription?.status === 'pending_approval');
+
     let userLicense = user.license;
-    if (!userLicense) {
+    if (!userLicense && !isEnterprisePending) {
       const generatedKey = generateLicenseKey();
       userLicense = await prisma.license.create({
         data: {
@@ -46,27 +58,17 @@ router.get('/dashboard', authenticateJWT, async (req: AuthRequest, res: Response
       });
     }
 
-    // Check if user is associated with an Enterprise Organization application
-    const enterpriseApp = await (prisma as any).enterpriseApplication.findFirst({
-      where: {
-        OR: [
-          { adminUserId: userId },
-          { workEmail: user.email },
-        ],
-      },
-    });
-
     return res.status(200).json({
       user: {
         email: user.email,
         displayName: user.displayName,
         avatarUrl: user.avatarUrl || null,
-        role: user.role,
+        role: enterpriseApp ? 'USER' : user.role, // Enterprise users are strictly USER, never platform ADMIN
         twoFactorEnabled: user.twoFactorEnabled || false,
       },
       license: {
-        licenseKey: userLicense.licenseKey,
-        maxDevices: userLicense.maxDevices,
+        licenseKey: isEnterprisePending ? '' : (userLicense?.licenseKey || ''),
+        maxDevices: isEnterprisePending ? 0 : (userLicense?.maxDevices || 0),
       },
       subscription: user.subscription
         ? {
@@ -91,7 +93,7 @@ router.get('/dashboard', authenticateJWT, async (req: AuthRequest, res: Response
             createdAt: enterpriseApp.createdAt,
           }
         : null,
-      devices: userLicense.devices
+      devices: userLicense?.devices
         ? userLicense.devices.map((dev) => ({
             id: dev.id,
             hostname: dev.hostname || 'unknown-host',

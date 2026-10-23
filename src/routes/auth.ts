@@ -921,17 +921,19 @@ router.post('/enterprise/send-signup-otp', rateLimit(5, 60000), async (req: Requ
           verificationCode: code,
           verificationExpires: expiresAt,
           displayName: adminName ? adminName.trim() : existingUser.displayName,
+          role: 'USER', // Strictly USER, never ADMIN
         },
       });
     } else {
-      // Create user record in unverified state
+      // Store pending verification user with isVerified: false, role: 'USER'
+      // No license is generated before verification or approval!
       await prisma.user.create({
         data: {
           email: cleanEmail,
           displayName: adminName ? adminName.trim() : cleanEmail.split('@')[0],
           passwordHash: hashPassword(crypto.randomBytes(32).toString('hex')),
           isVerified: false,
-          role: 'ADMIN',
+          role: 'USER', // Strictly USER, never ADMIN
           verificationCode: code,
           verificationExpires: expiresAt,
         },
@@ -947,7 +949,7 @@ router.post('/enterprise/send-signup-otp', rateLimit(5, 60000), async (req: Requ
       success: true,
       status: 'OTP_SENT',
       email: cleanEmail,
-      message: 'A 6-digit cryptographic verification code has been dispatched to your corporate work email.',
+      message: 'A 6-digit verification code has been dispatched to your corporate work email.',
     });
   } catch (err: any) {
     console.error('Enterprise send-signup-otp error:', err);
@@ -968,7 +970,9 @@ router.post('/enterprise/verify-signup-otp', rateLimit(10, 60000), async (req: R
       deploymentModel,
       adminName,
       adminRole,
+      password,
       country,
+      authPreference,
       useCaseDetails,
     } = req.body;
 
@@ -999,38 +1003,27 @@ router.post('/enterprise/verify-signup-otp', rateLimit(10, 60000), async (req: R
       return res.status(400).json({ error: 'Verification code has expired. Please request a new one.' });
     }
 
-    // Calculate Enterprise seat quota based on scale
-    let maxDevices = 25;
-    if (teamScale === '26-100') maxDevices = 100;
-    else if (teamScale === '101-500') maxDevices = 500;
-    else if (teamScale === '500+') maxDevices = 1000;
-
-    // Activate User
-    const updatedUser = await prisma.user.update({
-      where: { id: user.id },
-      data: {
-        isVerified: true,
-        role: 'ADMIN',
-        displayName: adminName ? adminName.trim() : user.displayName,
-        verificationCode: null,
-        verificationExpires: null,
-      },
-    });
-
-    // Provision Enterprise License (Status: pending_approval)
-    let userLicense = user.license;
-    if (!userLicense) {
-      const licenseKey = generateLicenseKey('enterprise');
-      userLicense = await prisma.license.create({
-        data: {
-          userId: updatedUser.id,
-          licenseKey,
-          maxDevices,
-        },
-      });
+    // Update User: isVerified = true, strictly role = 'USER', save password if provided
+    const userUpdateData: any = {
+      isVerified: true,
+      role: 'USER', // Enterprise users are strictly USER, never platform ADMIN
+      displayName: adminName ? adminName.trim() : user.displayName,
+      verificationCode: null,
+      verificationExpires: null,
+    };
+    if (password && String(password).trim().length >= 6) {
+      userUpdateData.passwordHash = hashPassword(String(password).trim());
     }
 
-    // Provision Enterprise Subscription (Status: pending_approval)
+    const updatedUser = await prisma.user.update({
+      where: { id: user.id },
+      data: userUpdateData,
+    });
+
+    // DO NOT GENERATE A PREMATURE LICENSE KEY!
+    // Enterprise licenses are only generated and activated upon OrBit administrator security approval!
+
+    // Provision Enterprise Subscription with status 'pending_approval'
     let userSub = user.subscription;
     if (!userSub) {
       userSub = await prisma.subscription.create({
@@ -1044,7 +1037,7 @@ router.post('/enterprise/verify-signup-otp', rateLimit(10, 60000), async (req: R
       });
     }
 
-    // Create or update Enterprise Application
+    // Create or update Enterprise Application with status 'PENDING_APPROVAL'
     let application = await (prisma as any).enterpriseApplication.findUnique({
       where: { workEmail: cleanEmail },
     });
@@ -1060,8 +1053,8 @@ router.post('/enterprise/verify-signup-otp', rateLimit(10, 60000), async (req: R
           deploymentModel: deploymentModel || 'hybrid',
           adminName: (adminName || cleanEmail.split('@')[0]).trim(),
           adminRole: adminRole || 'Engineering Lead',
-          authPreference: 'otp',
-          country: country || 'US',
+          authPreference: authPreference || 'otp',
+          country: country || 'United States',
           useCaseDetails: useCaseDetails || '',
           status: 'PENDING_APPROVAL',
           adminUserId: updatedUser.id,
@@ -1080,7 +1073,8 @@ router.post('/enterprise/verify-signup-otp', rateLimit(10, 60000), async (req: R
           adminName: adminName ? adminName.trim() : application.adminName,
           adminRole: adminRole || application.adminRole,
           country: country || application.country,
-          authPreference: 'otp',
+          authPreference: authPreference || application.authPreference,
+          status: 'PENDING_APPROVAL',
         },
       });
     }
@@ -1096,15 +1090,16 @@ router.post('/enterprise/verify-signup-otp', rateLimit(10, 60000), async (req: R
 
     return res.status(200).json({
       success: true,
-      message: 'Organization registered. Enterprise license key provisioned and pending administrative security approval.',
+      status: 'PENDING_APPROVAL',
+      message: 'Corporate email verified. Organization application submitted for administrative review.',
       token,
       user: {
         id: updatedUser.id,
         email: updatedUser.email,
         displayName: updatedUser.displayName,
-        role: updatedUser.role,
+        role: 'USER', // Strictly USER
         planTier: 'enterprise',
-        licenseKey: userLicense.licenseKey,
+        licenseKey: '', // No premature license key
       },
       application: {
         id: application.id,
@@ -1113,12 +1108,11 @@ router.post('/enterprise/verify-signup-otp', rateLimit(10, 60000), async (req: R
         workEmail: application.workEmail,
         teamScale: application.teamScale,
         status: application.status,
-        licenseKey: userLicense.licenseKey,
       },
     });
   } catch (err: any) {
     console.error('Enterprise verify-signup-otp error:', err);
-    return res.status(500).json({ error: 'Failed to verify code and provision organization.' });
+    return res.status(500).json({ error: 'Failed to verify code and submit application.' });
   }
 });
 
@@ -1163,14 +1157,14 @@ router.post('/enterprise/send-login-otp', rateLimit(5, 60000), async (req: Reque
 
     let targetUserId = user ? user.id : null;
     if (!user) {
-      // If user doesn't exist yet but application does, create the user
+      // If user doesn't exist yet but application does, create the user with role 'USER'
       const newUser = await prisma.user.create({
         data: {
           email: cleanEmail,
           displayName: app?.adminName || cleanEmail.split('@')[0],
           passwordHash: hashPassword(crypto.randomBytes(32).toString('hex')),
           isVerified: false,
-          role: 'ADMIN',
+          role: 'USER', // Strictly USER, never ADMIN
           verificationCode: code,
           verificationExpires: expiresAt,
         },
@@ -1188,6 +1182,7 @@ router.post('/enterprise/send-login-otp', rateLimit(5, 60000), async (req: Reque
         data: {
           verificationCode: code,
           verificationExpires: expiresAt,
+          role: 'USER', // Ensure strictly USER
         },
       });
     }
@@ -1250,6 +1245,7 @@ router.post('/enterprise/verify-login-otp', rateLimit(10, 60000), async (req: Re
       where: { id: user.id },
       data: {
         isVerified: true,
+        role: 'USER', // Strictly USER, never ADMIN
         verificationCode: null,
         verificationExpires: null,
       },
@@ -1265,9 +1261,10 @@ router.post('/enterprise/verify-login-otp', rateLimit(10, 60000), async (req: Re
       },
     });
 
-    // Ensure enterprise license exists
-    let licenseKey = user.license?.licenseKey;
-    if (!licenseKey) {
+    // Do NOT generate a license if pending approval!
+    const isPending = app && app.status === 'PENDING_APPROVAL';
+    let licenseKey = user.license?.licenseKey || '';
+    if (!licenseKey && !isPending && app?.status === 'APPROVED') {
       const newKey = generateLicenseKey('enterprise');
       const newLic = await prisma.license.create({
         data: {
@@ -1297,9 +1294,9 @@ router.post('/enterprise/verify-login-otp', rateLimit(10, 60000), async (req: Re
         email: user.email,
         displayName: user.displayName || user.email.split('@')[0],
         avatarUrl: user.avatarUrl || null,
-        role: user.role || 'ADMIN',
+        role: 'USER', // Strictly USER, never ADMIN
         planTier: normalizeTier(user.subscription?.planTier || 'enterprise'),
-        licenseKey,
+        licenseKey: isPending ? '' : licenseKey,
       },
       enterpriseApplication: app ? {
         id: app.id,
@@ -1314,7 +1311,7 @@ router.post('/enterprise/verify-login-otp', rateLimit(10, 60000), async (req: Re
   }
 });
 
-// POST /api/auth/enterprise/register (Password Fallback)
+// POST /api/auth/enterprise/register (Enforces OTP Verification)
 router.post('/enterprise/register', rateLimit(5, 60000), async (req: Request, res: Response) => {
   try {
     const {
@@ -1330,6 +1327,7 @@ router.post('/enterprise/register', rateLimit(5, 60000), async (req: Request, re
       authPreference,
       country,
       useCaseDetails,
+      code, // OTP verification code
     } = req.body;
 
     if (!companyName || !workEmail || !adminName) {
@@ -1345,100 +1343,157 @@ router.post('/enterprise/register', rateLimit(5, 60000), async (req: Request, re
       });
     }
 
-    // Check if already registered
+    // Check if an approved organization already exists
     const existingApp = await (prisma as any).enterpriseApplication.findUnique({
       where: { workEmail: cleanEmail },
     });
 
-    if (existingApp) {
+    if (existingApp && existingApp.status === 'APPROVED') {
       return res.status(409).json({
-        error: 'An Organization registration application with this work email is already submitted.',
-        applicationId: existingApp.id,
+        error: 'An active approved Organization already exists for this work email. Please sign in instead.',
         status: existingApp.status,
       });
     }
 
-    // Provision or find Admin User
-    let userId: string | null = null;
-    const existingUser = await prisma.user.findUnique({ where: { email: cleanEmail } });
+    // REQUIRE OTP CODE: If no code is passed, send OTP to the corporate work email!
+    if (!code) {
+      const generatedOtp = crypto.randomInt(100000, 1000000).toString();
+      const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
 
-    if (!existingUser && password) {
-      const passwordHash = hashPassword(String(password).trim());
-      const newUser = await prisma.user.create({
-        data: {
-          email: cleanEmail,
-          displayName: adminName.trim(),
-          passwordHash,
-          role: 'ADMIN',
-          isVerified: true,
-        },
+      const existingUser = await prisma.user.findUnique({ where: { email: cleanEmail } });
+      if (existingUser) {
+        await prisma.user.update({
+          where: { id: existingUser.id },
+          data: {
+            verificationCode: generatedOtp,
+            verificationExpires: expiresAt,
+            role: 'USER',
+          },
+        });
+      } else {
+        await prisma.user.create({
+          data: {
+            email: cleanEmail,
+            displayName: adminName.trim(),
+            passwordHash: password ? hashPassword(String(password).trim()) : hashPassword(crypto.randomBytes(32).toString('hex')),
+            isVerified: false,
+            role: 'USER', // Strictly USER, never ADMIN
+            verificationCode: generatedOtp,
+            verificationExpires: expiresAt,
+          },
+        });
+      }
+
+      sendEnterpriseOtpEmail(cleanEmail, generatedOtp, companyName.trim(), false).catch((err) => {
+        console.error('[Enterprise OTP Mailer Error]:', err);
       });
 
-      // Provision enterprise license key and subscription (locked pending approval)
-      const licenseKey = generateLicenseKey('enterprise');
-      await prisma.license.create({
-        data: {
-          userId: newUser.id,
-          licenseKey,
-          maxDevices: 25,
-        },
+      return res.status(200).json({
+        success: true,
+        status: 'OTP_REQUIRED',
+        email: cleanEmail,
+        message: 'A 6-digit corporate verification code has been dispatched to your email.',
       });
-
-      await prisma.subscription.create({
-        data: {
-          userId: newUser.id,
-          planTier: 'enterprise',
-          status: 'pending_approval',
-          amountPaid: 0,
-          expiresAt: new Date(Date.now() + 365 * 24 * 60 * 60 * 1000), // 1 year trial / contract
-        },
-      });
-
-      userId = newUser.id;
-    } else if (existingUser) {
-      userId = existingUser.id;
     }
 
-    const application = await (prisma as any).enterpriseApplication.create({
+    // Verify OTP code
+    const user = await prisma.user.findUnique({ where: { email: cleanEmail } });
+    if (!user) {
+      return res.status(404).json({ error: 'Registration session not found. Please request a new verification code.' });
+    }
+
+    if (!user.verificationCode || user.verificationCode !== String(code).trim()) {
+      return res.status(400).json({ error: 'Invalid verification code. Please check your email.' });
+    }
+
+    if (user.verificationExpires && user.verificationExpires < new Date()) {
+      return res.status(400).json({ error: 'Verification code has expired. Please request a new one.' });
+    }
+
+    // Activate User with role 'USER'
+    const passwordHash = password ? hashPassword(String(password).trim()) : user.passwordHash;
+    const updatedUser = await prisma.user.update({
+      where: { id: user.id },
       data: {
-        companyName: companyName.trim(),
-        workEmail: cleanEmail,
-        companyDomain: domain,
-        teamScale: teamScale || '26-100',
-        industry: industry || 'Software/SaaS',
-        deploymentModel: deploymentModel || 'hybrid',
-        adminName: adminName.trim(),
-        adminRole: adminRole || 'Engineering Lead',
-        authPreference: authPreference || 'otp',
-        country: country || 'US',
-        useCaseDetails: useCaseDetails || '',
-        status: 'PENDING_APPROVAL',
-        adminUserId: userId,
+        isVerified: true,
+        role: 'USER', // Strictly USER
+        passwordHash,
+        displayName: adminName.trim(),
+        verificationCode: null,
+        verificationExpires: null,
       },
     });
 
-    // Auto issue token if user was created with password
-    let token = '';
-    if (userId) {
-      token = signToken({ id: userId, email: cleanEmail });
-      res.cookie('orbit_session', token, {
-        httpOnly: true,
-        secure: process.env.NODE_ENV === 'production',
-        sameSite: 'lax',
-        maxAge: 7 * 24 * 60 * 60 * 1000,
+    // Create Subscription with status 'pending_approval' (NO license key created!)
+    await prisma.subscription.upsert({
+      where: { userId: updatedUser.id },
+      update: {
+        planTier: 'enterprise',
+        status: 'pending_approval',
+      },
+      create: {
+        userId: updatedUser.id,
+        planTier: 'enterprise',
+        status: 'pending_approval',
+        amountPaid: 0,
+        expiresAt: new Date(Date.now() + 365 * 24 * 60 * 60 * 1000),
+      },
+    });
+
+    // Create or update Enterprise Application
+    let application = await (prisma as any).enterpriseApplication.findUnique({
+      where: { workEmail: cleanEmail },
+    });
+
+    if (!application) {
+      application = await (prisma as any).enterpriseApplication.create({
+        data: {
+          companyName: companyName.trim(),
+          workEmail: cleanEmail,
+          companyDomain: domain,
+          teamScale: teamScale || '26-100',
+          industry: industry || 'Software/SaaS',
+          deploymentModel: deploymentModel || 'hybrid',
+          adminName: adminName.trim(),
+          adminRole: adminRole || 'Engineering Lead',
+          authPreference: authPreference || 'otp',
+          country: country || 'United States',
+          useCaseDetails: useCaseDetails || '',
+          status: 'PENDING_APPROVAL',
+          adminUserId: updatedUser.id,
+        },
+      });
+    } else {
+      application = await (prisma as any).enterpriseApplication.update({
+        where: { id: application.id },
+        data: {
+          adminUserId: updatedUser.id,
+          companyName: companyName.trim(),
+          companyDomain: domain,
+          teamScale: teamScale || application.teamScale,
+          industry: industry || application.industry,
+          deploymentModel: deploymentModel || application.deploymentModel,
+          adminName: adminName.trim(),
+          adminRole: adminRole || application.adminRole,
+          country: country || application.country,
+          authPreference: authPreference || application.authPreference,
+          status: 'PENDING_APPROVAL',
+        },
       });
     }
 
-    // Fetch user license key if available
-    let provisionedKey = '';
-    if (userId) {
-      const userLic = await prisma.license.findUnique({ where: { userId } });
-      if (userLic) provisionedKey = userLic.licenseKey;
-    }
+    const token = signToken({ id: updatedUser.id, email: cleanEmail });
+    res.cookie('orbit_session', token, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'lax',
+      maxAge: 7 * 24 * 60 * 60 * 1000,
+    });
 
-    return res.status(201).json({
+    return res.status(200).json({
       success: true,
-      message: 'Organization registered. Enterprise license key provisioned and pending administrative security approval.',
+      status: 'PENDING_APPROVAL',
+      message: 'Organization verified and application submitted for administrator review.',
       application: {
         id: application.id,
         companyName: application.companyName,
@@ -1446,9 +1501,16 @@ router.post('/enterprise/register', rateLimit(5, 60000), async (req: Request, re
         workEmail: application.workEmail,
         teamScale: application.teamScale,
         status: application.status,
-        licenseKey: provisionedKey,
       },
-      token: token || undefined,
+      user: {
+        id: updatedUser.id,
+        email: updatedUser.email,
+        displayName: updatedUser.displayName,
+        role: 'USER',
+        planTier: 'enterprise',
+        licenseKey: '',
+      },
+      token,
     });
   } catch (err: any) {
     console.error('Enterprise registration error:', err);

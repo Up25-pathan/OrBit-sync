@@ -284,6 +284,44 @@ async function ensureSchema() {
         "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
       )
     `);
+
+    // Auto-remediation: Ensure all enterprise users have role 'USER' and revoke premature unapproved licenses
+    try {
+      const enterpriseApps = await (prisma as any).enterpriseApplication.findMany();
+      for (const app of enterpriseApps) {
+        // Demote enterprise user to strictly 'USER'
+        if (app.adminUserId) {
+          await prisma.user.updateMany({
+            where: { id: app.adminUserId, role: 'ADMIN' },
+            data: { role: 'USER' },
+          });
+        }
+        await prisma.user.updateMany({
+          where: { email: app.workEmail, role: 'ADMIN' },
+          data: { role: 'USER' },
+        });
+
+        // If enterprise application is still PENDING_APPROVAL, remove premature licenses
+        if (app.status === 'PENDING_APPROVAL') {
+          const targetUser = await prisma.user.findFirst({
+            where: {
+              OR: [
+                ...(app.adminUserId ? [{ id: app.adminUserId }] : []),
+                { email: app.workEmail },
+              ],
+            },
+          });
+          if (targetUser) {
+            await prisma.license.deleteMany({
+              where: { userId: targetUser.id },
+            });
+          }
+        }
+      }
+      console.log('[Security Audit] Enterprise roles and unapproved license gates verified.');
+    } catch (e: any) {
+      console.warn('[Security Audit Warning]:', e.message);
+    }
   } catch (err: any) {
     console.error('[Schema] Failed to ensure schema columns:', err.message);
   }
