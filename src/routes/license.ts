@@ -220,7 +220,7 @@ async function handleDeviceHandshake(req: Request, res: Response) {
     const { planTier, expiresAt, amountPaid } = resolveEffectiveSubscription(license.user.subscription);
     const maxDevices = planTier === 'pro' ? 10 : planTier === 'enterprise' ? 999 : 3;
 
-    const existingDevice = license.devices.find((d) => d.deviceId === deviceId);
+    const existingDevice = license.devices.find((d: any) => d.deviceId === deviceId);
 
     if (existingDevice) {
       await prisma.device.update({
