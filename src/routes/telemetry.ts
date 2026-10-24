@@ -1,13 +1,18 @@
 import { Router, Request, Response } from 'express';
 import { prisma } from '../db';
+import { createRateLimiter } from '../utils/rateLimiter';
 
 const router = Router();
+
+// Rate limiter for telemetry endpoints (per IP)
+const telemetryRateLimit = createRateLimiter({ maxRequests: 50, windowMs: 60000, keyPrefix: 'telemetry' });
+const feedbackRateLimit = createRateLimiter({ maxRequests: 20, windowMs: 60000, keyPrefix: 'feedback' });
 
 /**
  * POST /api/telemetry/crash
  * Ingests fatal crash reports from desktop client (Rust panics & React UI errors).
  */
-router.post('/crash', async (req: Request, res: Response) => {
+router.post('/crash', telemetryRateLimit, async (req: Request, res: Response) => {
   try {
     const {
       id,
@@ -56,7 +61,7 @@ router.post('/crash', async (req: Request, res: Response) => {
  * POST /api/telemetry/server-error
  * Ingests 5xx server-error webhooks from the Go control server.
  */
-router.post('/server-error', async (req: Request, res: Response) => {
+router.post('/server-error', telemetryRateLimit, async (req: Request, res: Response) => {
   try {
     const controlSecret = process.env.CONTROL_SERVER_SECRET;
     const incomingSecret = req.headers['x-control-server-secret'];
@@ -95,7 +100,7 @@ router.post('/server-error', async (req: Request, res: Response) => {
  * POST /api/feedback
  * Ingests user feedback and bug reports from the desktop client with attached logs.
  */
-router.post(['/', '/submit'], async (req: Request, res: Response) => {
+router.post(['/', '/submit'], feedbackRateLimit, async (req: Request, res: Response) => {
   try {
     const {
       ticketId,

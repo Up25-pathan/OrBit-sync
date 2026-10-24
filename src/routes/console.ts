@@ -1,7 +1,7 @@
 import { Router, Response } from 'express';
 import crypto from 'crypto';
 import { prisma } from '../db';
-import { AuthRequest, authenticateJWT, hashPassword, verifyPassword } from '../auth';
+import { AuthRequest, authenticateJWT, hashPassword, verifyPassword, hashOtpCode, verifyOtpCode } from '../auth';
 import { generateLicenseKey, parseLicenseKey, normalizeTier } from '../utils/licenseGenerator';
 import { sendPasswordChangeOtpEmail } from '../utils/mailer';
 
@@ -98,8 +98,7 @@ router.get('/dashboard', authenticateJWT, async (req: AuthRequest, res: Response
             id: dev.id,
             hostname: dev.hostname || 'unknown-host',
             platform: dev.platform,
-            status: (Date.now() - new Date(dev.lastSeen).getTime()) < 60000 ? 'ACTIVE' : 'IDLE', // active if seen in last 60s
-            ping: parseFloat((Math.random() * 2 + 0.5).toFixed(1)), // mock active ping values
+            status: (Date.now() - new Date(dev.lastSeen).getTime()) < 60000 ? 'ACTIVE' : 'IDLE',
             lastSeen: new Date(dev.lastSeen).toISOString(),
           }))
         : [],
@@ -204,7 +203,7 @@ router.post('/password/request-otp', authenticateJWT, async (req: AuthRequest, r
     }
 
     // Verify that current password is correct
-    const isCurrentValid = verifyPassword(currentPassword, user.passwordHash);
+    const isCurrentValid = await verifyPassword(currentPassword, user.passwordHash);
     if (!isCurrentValid) {
       return res.status(400).json({ error: 'The current password you entered is incorrect.' });
     }
@@ -212,11 +211,12 @@ router.post('/password/request-otp', authenticateJWT, async (req: AuthRequest, r
     // Generate cryptographic 6-digit OTP
     const code = crypto.randomInt(100000, 1000000).toString();
     const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 mins expiry
+    const codeHash = await hashOtpCode(code);
 
     await prisma.user.update({
       where: { id: userId },
       data: {
-        verificationCode: code,
+        verificationCode: codeHash,
         verificationExpires: expiresAt,
       },
     });
@@ -267,13 +267,13 @@ router.post('/password/verify-and-update', authenticateJWT, async (req: AuthRequ
     }
 
     // Verify current password again
-    const isCurrentValid = verifyPassword(currentPassword, user.passwordHash);
+    const isCurrentValid = await verifyPassword(currentPassword, user.passwordHash);
     if (!isCurrentValid) {
       return res.status(400).json({ error: 'Current password verification failed.' });
     }
 
     // Verify OTP code
-    if (!user.verificationCode || user.verificationCode !== cleanCode) {
+    if (!user.verificationCode || !(await verifyOtpCode(cleanCode, user.verificationCode))) {
       return res.status(400).json({ error: 'Invalid verification code. Please check your email.' });
     }
 
@@ -283,21 +283,22 @@ router.post('/password/verify-and-update', authenticateJWT, async (req: AuthRequ
     }
 
     // Hash new password
-    const newPasswordHash = hashPassword(cleanNewPass);
+    const newPasswordHash = await hashPassword(cleanNewPass);
 
-    // Update password and invalidate OTP code
+    // Update password, invalidate OTP code, and increment token version to invalidate all sessions
     await prisma.user.update({
       where: { id: userId },
       data: {
         passwordHash: newPasswordHash,
         verificationCode: null,
         verificationExpires: null,
+        tokenVersion: { increment: 1 },
       },
     });
 
     return res.status(200).json({
       success: true,
-      message: 'Password updated successfully! Your account is secure.',
+      message: 'Password updated successfully! All sessions have been invalidated. Please log in again.',
     });
   } catch (err: any) {
     console.error('Password verify and update error:', err);
@@ -369,7 +370,7 @@ router.post('/devices/revoke', authenticateJWT, async (req: AuthRequest, res: Re
     });
 
     return res.status(200).json({
-      message: 'License key is permanently locked for Beta launch. Self-service key rotation is disabled.',
+      message: 'Device authorization revoked successfully.',
     });
   } catch (err: any) {
     return res.status(500).json({ error: 'Failed to process request.' });

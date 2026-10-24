@@ -2,9 +2,12 @@ import crypto from 'crypto';
 
 const LICENSE_SECRET = process.env.LICENSE_SECRET;
 if (!LICENSE_SECRET) {
+  if (process.env.NODE_ENV === 'production') {
+    throw new Error('FATAL: LICENSE_SECRET environment variable is required in production');
+  }
   console.error('=============================================');
-  console.error('  CRITICAL: LICENSE_SECRET env var not set!');
-  console.error('  Set a strong random value in production.');
+  console.error('  WARNING: LICENSE_SECRET env var not set!');
+  console.error('  Using INSECURE fallback for development only.');
   console.error('=============================================');
 }
 const LICENSE_SECRET_FALLBACK = LICENSE_SECRET || 'dev-only-insecure-license-secret';

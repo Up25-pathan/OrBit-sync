@@ -5,6 +5,7 @@ import fs from 'fs';
 import { prisma } from '../db';
 import { verifyToken, hashPassword, verifyPassword } from '../auth';
 import { generateLicenseKey, normalizeTier } from '../utils/licenseGenerator';
+import { logAuditEvent } from '../utils/auditLog';
 
 const router = Router();
 
@@ -178,19 +179,22 @@ router.put('/change-password', async (req: AdminAuthRequest, res: Response) => {
     }
 
     if (currentPassword) {
-      const isValid = verifyPassword(currentPassword, admin.passwordHash);
+      const isValid = await verifyPassword(currentPassword, admin.passwordHash);
       if (!isValid) {
         return res.status(401).json({ error: 'Current password provided is incorrect.' });
       }
     }
 
-    const newHash = hashPassword(newPassword);
+    const newHash = await hashPassword(newPassword);
     await prisma.user.update({
       where: { id: adminId },
-      data: { passwordHash: newHash },
+      data: { 
+        passwordHash: newHash,
+        tokenVersion: { increment: 1 },
+      },
     });
 
-    return res.status(200).json({ success: true, message: 'Admin password updated successfully.' });
+    return res.status(200).json({ success: true, message: 'Admin password updated successfully. All sessions invalidated.' });
   } catch (err: any) {
     console.error('Change admin password error:', err);
     return res.status(500).json({ error: 'Failed to update admin password.' });
@@ -317,7 +321,7 @@ router.put('/users/:id', async (req: Request, res: Response) => {
 });
 
 // PUT /api/v1/admin/users/:id/tier (Admin Plan Tier Override)
-router.put('/users/:id/tier', async (req: Request, res: Response) => {
+router.put('/users/:id/tier', async (req: AdminAuthRequest, res: Response) => {
   try {
     const { id } = req.params;
     const { planTier, expiresAt, maxDevices } = req.body;
@@ -350,6 +354,17 @@ router.put('/users/:id/tier', async (req: Request, res: Response) => {
       data: { maxDevices: newMaxDevices },
     });
 
+    await logAuditEvent({
+      adminUserId: req.adminUser!.id,
+      adminEmail: req.adminUser!.email,
+      action: 'PUT /api/v1/admin/users/:id/tier',
+      targetType: 'subscription',
+      targetId: id,
+      details: { planTier, maxDevices: newMaxDevices, expiresAt },
+      ipAddress: req.ip,
+      userAgent: req.headers['user-agent'],
+    });
+
     return res.status(200).json({ success: true, subscription: updatedSubscription });
   } catch (err: any) {
     console.error('Tier override error:', err);
@@ -358,7 +373,7 @@ router.put('/users/:id/tier', async (req: Request, res: Response) => {
 });
 
 // DELETE /api/v1/admin/users/:id (Delete User Account and all existence)
-router.delete('/users/:id', async (req: Request, res: Response) => {
+router.delete('/users/:id', async (req: AdminAuthRequest, res: Response) => {
   try {
     const { id } = req.params;
     const user = await prisma.user.findUnique({ where: { id } });
@@ -369,6 +384,18 @@ router.delete('/users/:id', async (req: Request, res: Response) => {
       prisma.supportTicket.deleteMany({ where: { email: user.email } }),
       prisma.user.delete({ where: { id } }),
     ]);
+
+    await logAuditEvent({
+      adminUserId: req.adminUser!.id,
+      adminEmail: req.adminUser!.email,
+      action: 'DELETE /api/v1/admin/users/:id',
+      targetType: 'user',
+      targetId: id,
+      details: { email: user.email, displayName: user.displayName },
+      ipAddress: req.ip,
+      userAgent: req.headers['user-agent'],
+    });
+
     return res.status(200).json({ success: true, message: 'User account and all associated data deleted successfully.' });
   } catch (err: any) {
     console.error('Delete user error:', err);
@@ -1125,6 +1152,17 @@ router.post('/enterprises/:id/approve', requireAdmin, async (req: AdminAuthReque
 
     console.log(`[CYBER-SECURITY AUDIT] Enterprise Organization APPROVED: "${enterprise.companyName}" (${enterprise.workEmail}) approved by ${adminEmail} at ${new Date().toISOString()}`);
 
+    await logAuditEvent({
+      adminUserId: req.adminUser!.id,
+      adminEmail,
+      action: 'POST /api/v1/admin/enterprises/:id/approve',
+      targetType: 'enterprise',
+      targetId: enterprise.id,
+      details: { companyName: enterprise.companyName, workEmail: enterprise.workEmail },
+      ipAddress: req.ip,
+      userAgent: req.headers['user-agent'],
+    });
+
     return res.status(200).json({
       success: true,
       message: `Organization "${enterprise.companyName}" approved and Enterprise License activated.`,
@@ -1177,6 +1215,17 @@ router.post('/enterprises/:id/reject', requireAdmin, async (req: AdminAuthReques
 
     console.log(`[CYBER-SECURITY AUDIT] Enterprise Organization REJECTED: "${enterprise.companyName}" (${enterprise.workEmail}) rejected by ${adminEmail}. Reason: ${reason}`);
 
+    await logAuditEvent({
+      adminUserId: req.adminUser!.id,
+      adminEmail,
+      action: 'POST /api/v1/admin/enterprises/:id/reject',
+      targetType: 'enterprise',
+      targetId: enterprise.id,
+      details: { companyName: enterprise.companyName, workEmail: enterprise.workEmail, reason },
+      ipAddress: req.ip,
+      userAgent: req.headers['user-agent'],
+    });
+
     return res.status(200).json({
       success: true,
       message: `Organization "${enterprise.companyName}" application rejected.`,
@@ -1185,6 +1234,591 @@ router.post('/enterprises/:id/reject', requireAdmin, async (req: AdminAuthReques
   } catch (err: any) {
     console.error('[Admin] Failed to reject enterprise application:', err);
     return res.status(500).json({ error: 'Failed to reject enterprise organization.' });
+  }
+});
+
+// GET /api/v1/admin/enterprises/:id - Get full enterprise detail
+router.get('/enterprises/:id', requireAdmin, async (req: AdminAuthRequest, res: Response) => {
+  try {
+    const { id } = req.params;
+    const enterprise = await (prisma as any).enterpriseApplication.findUnique({
+      where: { id },
+    });
+
+    if (!enterprise) {
+      return res.status(404).json({ error: 'Enterprise not found.' });
+    }
+
+    let targetUserId = enterprise.adminUserId;
+    if (!targetUserId) {
+      const user = await prisma.user.findUnique({ where: { email: enterprise.workEmail } });
+      if (user) targetUserId = user.id;
+    }
+
+    let license = null;
+    let subscription = null;
+    let devices: any[] = [];
+    let teamMembers: any[] = [];
+
+    if (targetUserId) {
+      license = await prisma.license.findUnique({
+        where: { userId: targetUserId },
+        include: { devices: true },
+      });
+
+      subscription = await prisma.subscription.findUnique({
+        where: { userId: targetUserId },
+      });
+
+      devices = license?.devices || [];
+
+      teamMembers = await prisma.user.findMany({
+        where: {
+          email: { endsWith: `@${enterprise.companyDomain}` },
+        },
+        select: {
+          id: true,
+          email: true,
+          displayName: true,
+          role: true,
+          isVerified: true,
+          createdAt: true,
+          license: { select: { licenseKey: true, maxDevices: true } },
+          subscription: { select: { planTier: true, status: true } },
+        },
+      });
+    }
+
+    const deviceStats = {
+      total: devices.length,
+      active: devices.filter(d => Date.now() - new Date(d.lastSeen).getTime() < 60000).length,
+      byPlatform: devices.reduce((acc, d) => {
+        acc[d.platform] = (acc[d.platform] || 0) + 1;
+        return acc;
+      }, {} as Record<string, number>),
+    };
+
+    return res.status(200).json({
+      enterprise: {
+        ...enterprise,
+        licenseKey: license?.licenseKey || null,
+        maxDevices: license?.maxDevices || 0,
+        subscription: subscription ? {
+          planTier: subscription.planTier,
+          status: subscription.status,
+          expiresAt: subscription.expiresAt,
+          stripeCustomerId: subscription.stripeCustomerId,
+          amountPaid: subscription.amountPaid,
+        } : null,
+        devices,
+        deviceStats,
+        teamMembers,
+      },
+    });
+  } catch (err: any) {
+    console.error('[Admin] Failed to fetch enterprise detail:', err);
+    return res.status(500).json({ error: 'Failed to fetch enterprise detail.' });
+  }
+});
+
+// PUT /api/v1/admin/enterprises/:id - Update enterprise settings
+router.put('/enterprises/:id', requireAdmin, async (req: AdminAuthRequest, res: Response) => {
+  try {
+    const { id } = req.params;
+    const { maxDevices, teamScale, deploymentModel, authPreference, status, notes } = req.body;
+
+    const enterprise = await (prisma as any).enterpriseApplication.findUnique({ where: { id } });
+    if (!enterprise) {
+      return res.status(404).json({ error: 'Enterprise not found.' });
+    }
+
+    let targetUserId = enterprise.adminUserId;
+    if (!targetUserId) {
+      const user = await prisma.user.findUnique({ where: { email: enterprise.workEmail } });
+      if (user) targetUserId = user.id;
+    }
+
+    const updated = await (prisma as any).enterpriseApplication.update({
+      where: { id },
+      data: {
+        ...(teamScale && { teamScale }),
+        ...(deploymentModel && { deploymentModel }),
+        ...(authPreference && { authPreference }),
+        ...(status && { status }),
+        ...(notes !== undefined && { useCaseDetails: notes }),
+      },
+    });
+
+    if (targetUserId && maxDevices) {
+      const license = await prisma.license.findUnique({ where: { userId: targetUserId } });
+      if (license) {
+        await prisma.license.update({
+          where: { id: license.id },
+          data: { maxDevices },
+        });
+      }
+    }
+
+    await logAuditEvent({
+      adminUserId: req.adminUser!.id,
+      adminEmail: req.adminUser!.email,
+      action: 'PUT /api/v1/admin/enterprises/:id',
+      targetType: 'enterprise',
+      targetId: id,
+      details: { maxDevices, teamScale, deploymentModel, authPreference, status },
+      ipAddress: req.ip,
+      userAgent: req.headers['user-agent'],
+    });
+
+    return res.status(200).json({ success: true, enterprise: updated });
+  } catch (err: any) {
+    console.error('[Admin] Failed to update enterprise:', err);
+    return res.status(500).json({ error: 'Failed to update enterprise.' });
+  }
+});
+
+// POST /api/v1/admin/enterprises/:id/license/regenerate - Regenerate enterprise license
+router.post('/enterprises/:id/license/regenerate', requireAdmin, async (req: AdminAuthRequest, res: Response) => {
+  try {
+    const { id } = req.params;
+    const enterprise = await (prisma as any).enterpriseApplication.findUnique({ where: { id } });
+    if (!enterprise) return res.status(404).json({ error: 'Enterprise not found.' });
+
+    let targetUserId = enterprise.adminUserId;
+    if (!targetUserId) {
+      const user = await prisma.user.findUnique({ where: { email: enterprise.workEmail } });
+      if (user) targetUserId = user.id;
+    }
+    if (!targetUserId) return res.status(404).json({ error: 'No associated user found.' });
+
+    await prisma.license.deleteMany({ where: { userId: targetUserId } });
+    const newKey = generateLicenseKey('enterprise');
+    const maxDevices = enterprise.teamScale === '500+' ? 1000 : enterprise.teamScale === '101-500' ? 500 : enterprise.teamScale === '26-100' ? 100 : 25;
+
+    const license = await prisma.license.create({
+      data: { userId: targetUserId, licenseKey: newKey, maxDevices },
+    });
+
+    await logAuditEvent({
+      adminUserId: req.adminUser!.id,
+      adminEmail: req.adminUser!.email,
+      action: 'POST /api/v1/admin/enterprises/:id/license/regenerate',
+      targetType: 'license',
+      targetId: license.id,
+      details: { enterpriseId: id, maxDevices },
+      ipAddress: req.ip,
+      userAgent: req.headers['user-agent'],
+    });
+
+    return res.status(200).json({ success: true, licenseKey: license.licenseKey, maxDevices });
+  } catch (err: any) {
+    console.error('[Admin] Failed to regenerate license:', err);
+    return res.status(500).json({ error: 'Failed to regenerate license.' });
+  }
+});
+
+// POST /api/v1/admin/enterprises/:id/license/revoke - Revoke enterprise license
+router.post('/enterprises/:id/license/revoke', requireAdmin, async (req: AdminAuthRequest, res: Response) => {
+  try {
+    const { id } = req.params;
+    const enterprise = await (prisma as any).enterpriseApplication.findUnique({ where: { id } });
+    if (!enterprise) return res.status(404).json({ error: 'Enterprise not found.' });
+
+    let targetUserId = enterprise.adminUserId;
+    if (!targetUserId) {
+      const user = await prisma.user.findUnique({ where: { email: enterprise.workEmail } });
+      if (user) targetUserId = user.id;
+    }
+    if (!targetUserId) return res.status(404).json({ error: 'No associated user found.' });
+
+    await prisma.license.deleteMany({ where: { userId: targetUserId } });
+    await prisma.device.deleteMany({
+      where: { license: { userId: targetUserId } },
+    });
+
+    await logAuditEvent({
+      adminUserId: req.adminUser!.id,
+      adminEmail: req.adminUser!.email,
+      action: 'POST /api/v1/admin/enterprises/:id/license/revoke',
+      targetType: 'license',
+      targetId: id,
+      details: { enterpriseId: id },
+      ipAddress: req.ip,
+      userAgent: req.headers['user-agent'],
+    });
+
+    return res.status(200).json({ success: true, message: 'Enterprise license revoked and all devices unpaired.' });
+  } catch (err: any) {
+    console.error('[Admin] Failed to revoke license:', err);
+    return res.status(500).json({ error: 'Failed to revoke license.' });
+  }
+});
+
+// PUT /api/v1/admin/enterprises/:id/subscription - Update enterprise subscription
+router.put('/enterprises/:id/subscription', requireAdmin, async (req: AdminAuthRequest, res: Response) => {
+  try {
+    const { id } = req.params;
+    const { planTier, status, expiresAt, amountPaid, stripeCustomerId } = req.body;
+
+    const enterprise = await (prisma as any).enterpriseApplication.findUnique({ where: { id } });
+    if (!enterprise) return res.status(404).json({ error: 'Enterprise not found.' });
+
+    let targetUserId = enterprise.adminUserId;
+    if (!targetUserId) {
+      const user = await prisma.user.findUnique({ where: { email: enterprise.workEmail } });
+      if (user) targetUserId = user.id;
+    }
+    if (!targetUserId) return res.status(404).json({ error: 'No associated user found.' });
+
+    const subscription = await prisma.subscription.upsert({
+      where: { userId: targetUserId },
+      update: {
+        ...(planTier && { planTier }),
+        ...(status && { status }),
+        ...(expiresAt && { expiresAt: new Date(expiresAt) }),
+        ...(amountPaid !== undefined && { amountPaid }),
+        ...(stripeCustomerId && { stripeCustomerId }),
+      },
+      create: {
+        userId: targetUserId,
+        planTier: planTier || 'enterprise',
+        status: status || 'active',
+        expiresAt: expiresAt ? new Date(expiresAt) : new Date(Date.now() + 365 * 24 * 60 * 60 * 1000),
+        amountPaid: amountPaid || 0,
+        stripeCustomerId,
+      },
+    });
+
+    if (targetUserId) {
+      const license = await prisma.license.findUnique({ where: { userId: targetUserId } });
+      if (license) {
+        const maxDevices = subscription.planTier === 'enterprise' ? 999 : subscription.planTier === 'pro' ? 10 : 3;
+        await prisma.license.update({ where: { id: license.id }, data: { maxDevices } });
+      }
+    }
+
+    await logAuditEvent({
+      adminUserId: req.adminUser!.id,
+      adminEmail: req.adminUser!.email,
+      action: 'PUT /api/v1/admin/enterprises/:id/subscription',
+      targetType: 'subscription',
+      targetId: subscription.id,
+      details: { enterpriseId: id, planTier, status, expiresAt, amountPaid },
+      ipAddress: req.ip,
+      userAgent: req.headers['user-agent'],
+    });
+
+    return res.status(200).json({ success: true, subscription });
+  } catch (err: any) {
+    console.error('[Admin] Failed to update subscription:', err);
+    return res.status(500).json({ error: 'Failed to update subscription.' });
+  }
+});
+
+// GET /api/v1/admin/enterprises/:id/devices - List enterprise devices
+router.get('/enterprises/:id/devices', requireAdmin, async (req: AdminAuthRequest, res: Response) => {
+  try {
+    const { id } = req.params;
+    const enterprise = await (prisma as any).enterpriseApplication.findUnique({ where: { id } });
+    if (!enterprise) return res.status(404).json({ error: 'Enterprise not found.' });
+
+    let targetUserId = enterprise.adminUserId;
+    if (!targetUserId) {
+      const user = await prisma.user.findUnique({ where: { email: enterprise.workEmail } });
+      if (user) targetUserId = user.id;
+    }
+    if (!targetUserId) return res.status(404).json({ error: 'No associated user found.' });
+
+    const license = await prisma.license.findUnique({ where: { userId: targetUserId }, include: { devices: true } });
+    if (!license) return res.status(200).json({ devices: [] });
+
+    const devices = license.devices.map((d: any) => ({
+      id: d.id,
+      deviceId: d.deviceId,
+      hostname: d.hostname || 'unknown-peer',
+      platform: d.platform,
+      lastSeen: d.lastSeen,
+      status: Date.now() - new Date(d.lastSeen).getTime() < 60000 ? 'ACTIVE' : 'IDLE',
+    }));
+
+    return res.status(200).json({ devices });
+  } catch (err: any) {
+    console.error('[Admin] Failed to fetch enterprise devices:', err);
+    return res.status(500).json({ error: 'Failed to fetch devices.' });
+  }
+});
+
+// POST /api/v1/admin/enterprises/:id/devices/:deviceId/revoke - Revoke enterprise device
+router.post('/enterprises/:id/devices/:deviceId/revoke', requireAdmin, async (req: AdminAuthRequest, res: Response) => {
+  try {
+    const { id, deviceId } = req.params;
+    const enterprise = await (prisma as any).enterpriseApplication.findUnique({ where: { id } });
+    if (!enterprise) return res.status(404).json({ error: 'Enterprise not found.' });
+
+    let targetUserId = enterprise.adminUserId;
+    if (!targetUserId) {
+      const user = await prisma.user.findUnique({ where: { email: enterprise.workEmail } });
+      if (user) targetUserId = user.id;
+    }
+    if (!targetUserId) return res.status(404).json({ error: 'No associated user found.' });
+
+    const license = await prisma.license.findUnique({ where: { userId: targetUserId } });
+    if (!license) return res.status(404).json({ error: 'No license found.' });
+
+    await prisma.device.deleteMany({ where: { id: deviceId, licenseId: license.id } });
+
+    await logAuditEvent({
+      adminUserId: req.adminUser!.id,
+      adminEmail: req.adminUser!.email,
+      action: 'POST /api/v1/admin/enterprises/:id/devices/:deviceId/revoke',
+      targetType: 'device',
+      targetId: deviceId,
+      details: { enterpriseId: id, licenseId: license.id },
+      ipAddress: req.ip,
+      userAgent: req.headers['user-agent'],
+    });
+
+    return res.status(200).json({ success: true, message: 'Device revoked.' });
+  } catch (err: any) {
+    console.error('[Admin] Failed to revoke device:', err);
+    return res.status(500).json({ error: 'Failed to revoke device.' });
+  }
+});
+
+// GET /api/v1/admin/enterprises/:id/usage - Get enterprise usage analytics
+router.get('/enterprises/:id/usage', requireAdmin, async (req: AdminAuthRequest, res: Response) => {
+  try {
+    const { id } = req.params;
+    const enterprise = await (prisma as any).enterpriseApplication.findUnique({ where: { id } });
+    if (!enterprise) return res.status(404).json({ error: 'Enterprise not found.' });
+
+    let targetUserId = enterprise.adminUserId;
+    if (!targetUserId) {
+      const user = await prisma.user.findUnique({ where: { email: enterprise.workEmail } });
+      if (user) targetUserId = user.id;
+    }
+    if (!targetUserId) return res.status(404).json({ error: 'No associated user found.' });
+
+    const license = await prisma.license.findUnique({ where: { userId: targetUserId }, include: { devices: true } });
+    const subscription = await prisma.subscription.findUnique({ where: { userId: targetUserId } });
+
+    const now = Date.now();
+    const dayMs = 24 * 60 * 60 * 1000;
+    const last30Days = Array.from({ length: 30 }, (_, i) => {
+      const date = new Date(now - (29 - i) * dayMs);
+      return date.toISOString().split('T')[0];
+    });
+
+    const deviceStats = license?.devices ? {
+      total: license.devices.length,
+      active: license.devices.filter((d: any) => now - new Date(d.lastSeen).getTime() < 60000).length,
+      byPlatform: license.devices.reduce((acc: any, d: any) => {
+        acc[d.platform] = (acc[d.platform] || 0) + 1;
+        return acc;
+      }, {}),
+    } : { total: 0, active: 0, byPlatform: {} };
+
+    const maxDevices = license?.maxDevices || (subscription?.planTier === 'enterprise' ? 999 : 50);
+    const utilization = maxDevices > 0 ? (license?.devices?.length || 0) / maxDevices * 100 : 0;
+
+    return res.status(200).json({
+      usage: {
+        deviceStats,
+        utilization,
+        maxDevices,
+        planTier: subscription?.planTier || 'enterprise',
+        subscriptionStatus: subscription?.status || 'active',
+        billingCycle: subscription?.expiresAt,
+        // Mock data for storage/bandwidth - would come from control server in production
+        storageUsedGB: Math.floor(Math.random() * 500) + 50,
+        bandwidthUsedGB: Math.floor(Math.random() * 2000) + 100,
+        activeProjects: Math.floor(Math.random() * 20) + 5,
+        last30Days: last30Days.map(date => ({
+          date,
+          activeDevices: Math.floor(Math.random() * (license?.devices?.length || 10)) + 1,
+          dataTransferredGB: Math.floor(Math.random() * 100) + 5,
+        })),
+      },
+    });
+  } catch (err: any) {
+    console.error('[Admin] Failed to fetch enterprise usage:', err);
+    return res.status(500).json({ error: 'Failed to fetch usage analytics.' });
+  }
+});
+
+// GET /api/v1/admin/enterprises/:id/audit-logs - Get enterprise audit logs
+router.get('/enterprises/:id/audit-logs', requireAdmin, async (req: AdminAuthRequest, res: Response) => {
+  try {
+    const { id } = req.params;
+    const enterprise = await (prisma as any).enterpriseApplication.findUnique({ where: { id } });
+    if (!enterprise) return res.status(404).json({ error: 'Enterprise not found.' });
+
+    let targetUserId = enterprise.adminUserId;
+    if (!targetUserId) {
+      const user = await prisma.user.findUnique({ where: { email: enterprise.workEmail } });
+      if (user) targetUserId = user.id;
+    }
+
+    const logs = await (prisma as any).auditLog.findMany({
+      where: {
+        OR: [
+          { targetType: 'enterprise', targetId: id },
+          { targetType: 'license', details: { path: ['enterpriseId'], equals: id } },
+          { targetType: 'subscription', details: { path: ['enterpriseId'], equals: id } },
+          { targetType: 'device', details: { path: ['enterpriseId'], equals: id } },
+          { targetType: 'user', details: { path: ['enterpriseId'], equals: id } },
+        ],
+      },
+      orderBy: { createdAt: 'desc' },
+      take: 100,
+    });
+
+    return res.status(200).json({ logs });
+  } catch (err: any) {
+    console.error('[Admin] Failed to fetch audit logs:', err);
+    return res.status(500).json({ error: 'Failed to fetch audit logs.' });
+  }
+});
+
+// GET /api/v1/admin/enterprises/:id/team - Get enterprise team members
+router.get('/enterprises/:id/team', requireAdmin, async (req: AdminAuthRequest, res: Response) => {
+  try {
+    const { id } = req.params;
+    const enterprise = await (prisma as any).enterpriseApplication.findUnique({ where: { id } });
+    if (!enterprise) return res.status(404).json({ error: 'Enterprise not found.' });
+
+    const teamMembers = await prisma.user.findMany({
+      where: { email: { endsWith: `@${enterprise.companyDomain}` } },
+      select: {
+        id: true,
+        email: true,
+        displayName: true,
+        role: true,
+        isVerified: true,
+        createdAt: true,
+        license: { select: { licenseKey: true, maxDevices: true, devices: true } },
+        subscription: { select: { planTier: true, status: true, expiresAt: true } },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    const members = teamMembers.map(m => ({
+      id: m.id,
+      email: m.email,
+      displayName: m.displayName,
+      role: m.role,
+      isVerified: m.isVerified,
+      joinedAt: m.createdAt,
+      licenseKey: m.license?.licenseKey,
+      maxDevices: m.license?.maxDevices,
+      activeDevices: m.license?.devices?.length || 0,
+      planTier: m.subscription?.planTier || 'free',
+      subscriptionStatus: m.subscription?.status || 'inactive',
+    }));
+
+    return res.status(200).json({ team: members, domain: enterprise.companyDomain });
+  } catch (err: any) {
+    console.error('[Admin] Failed to fetch enterprise team:', err);
+    return res.status(500).json({ error: 'Failed to fetch team members.' });
+  }
+});
+
+// POST /api/v1/admin/enterprises/:id/suspend - Suspend enterprise access
+router.post('/enterprises/:id/suspend', requireAdmin, async (req: AdminAuthRequest, res: Response) => {
+  try {
+    const { id } = req.params;
+    const enterprise = await (prisma as any).enterpriseApplication.findUnique({ where: { id } });
+    if (!enterprise) return res.status(404).json({ error: 'Enterprise not found.' });
+
+    let targetUserId = enterprise.adminUserId;
+    if (!targetUserId) {
+      const user = await prisma.user.findUnique({ where: { email: enterprise.workEmail } });
+      if (user) targetUserId = user.id;
+    }
+
+    if (targetUserId) {
+      await prisma.subscription.updateMany({
+        where: { userId: targetUserId },
+        data: { status: 'suspended' },
+      });
+      await prisma.license.updateMany({
+        where: { userId: targetUserId },
+        data: { maxDevices: 0 },
+      });
+    }
+
+    const updated = await (prisma as any).enterpriseApplication.update({
+      where: { id },
+      data: { status: 'SUSPENDED' },
+    });
+
+    await logAuditEvent({
+      adminUserId: req.adminUser!.id,
+      adminEmail: req.adminUser!.email,
+      action: 'POST /api/v1/admin/enterprises/:id/suspend',
+      targetType: 'enterprise',
+      targetId: id,
+      details: { companyName: enterprise.companyName },
+      ipAddress: req.ip,
+      userAgent: req.headers['user-agent'],
+    });
+
+    return res.status(200).json({ success: true, message: 'Enterprise suspended. All access revoked.', enterprise: updated });
+  } catch (err: any) {
+    console.error('[Admin] Failed to suspend enterprise:', err);
+    return res.status(500).json({ error: 'Failed to suspend enterprise.' });
+  }
+});
+
+// POST /api/v1/admin/enterprises/:id/reactivate - Reactivate suspended enterprise
+router.post('/enterprises/:id/reactivate', requireAdmin, async (req: AdminAuthRequest, res: Response) => {
+  try {
+    const { id } = req.params;
+    const enterprise = await (prisma as any).enterpriseApplication.findUnique({ where: { id } });
+    if (!enterprise) return res.status(404).json({ error: 'Enterprise not found.' });
+
+    if (enterprise.status !== 'SUSPENDED') {
+      return res.status(400).json({ error: 'Enterprise is not suspended.' });
+    }
+
+    let targetUserId = enterprise.adminUserId;
+    if (!targetUserId) {
+      const user = await prisma.user.findUnique({ where: { email: enterprise.workEmail } });
+      if (user) targetUserId = user.id;
+    }
+
+    if (targetUserId) {
+      const maxDevices = enterprise.teamScale === '500+' ? 1000 : enterprise.teamScale === '101-500' ? 500 : enterprise.teamScale === '26-100' ? 100 : 25;
+      await prisma.subscription.updateMany({
+        where: { userId: targetUserId },
+        data: { status: 'active' },
+      });
+      await prisma.license.updateMany({
+        where: { userId: targetUserId },
+        data: { maxDevices },
+      });
+    }
+
+    const updated = await (prisma as any).enterpriseApplication.update({
+      where: { id },
+      data: { status: 'APPROVED' },
+    });
+
+    await logAuditEvent({
+      adminUserId: req.adminUser!.id,
+      adminEmail: req.adminUser!.email,
+      action: 'POST /api/v1/admin/enterprises/:id/reactivate',
+      targetType: 'enterprise',
+      targetId: id,
+      details: { companyName: enterprise.companyName },
+      ipAddress: req.ip,
+      userAgent: req.headers['user-agent'],
+    });
+
+    return res.status(200).json({ success: true, message: 'Enterprise reactivated.', enterprise: updated });
+  } catch (err: any) {
+    console.error('[Admin] Failed to reactivate enterprise:', err);
+    return res.status(500).json({ error: 'Failed to reactivate enterprise.' });
   }
 });
 

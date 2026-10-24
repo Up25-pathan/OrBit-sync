@@ -6,17 +6,24 @@ import { normalizeTier } from '../utils/licenseGenerator';
 const router = Router();
 const JWT_SECRET = process.env.JWT_SECRET;
 if (!JWT_SECRET) {
+  if (process.env.NODE_ENV === 'production') {
+    throw new Error('FATAL: JWT_SECRET environment variable is required in production');
+  }
   console.error('=============================================');
-  console.error('  CRITICAL: JWT_SECRET env var not set!');
+  console.error('  WARNING: JWT_SECRET env var not set!');
+  console.error('  Using INSECURE fallback for development only.');
   console.error('=============================================');
 }
 const JWT_SECRET_FALLBACK = JWT_SECRET || 'dev-only-insecure-fallback-change-me';
 
 const CONTROL_SERVER_SECRET = process.env.CONTROL_SERVER_SECRET;
 if (!CONTROL_SERVER_SECRET) {
+  if (process.env.NODE_ENV === 'production') {
+    throw new Error('FATAL: CONTROL_SERVER_SECRET environment variable is required in production');
+  }
   console.error('=============================================');
-  console.error('  CRITICAL: CONTROL_SERVER_SECRET env var not set!');
-  console.error('  Set a strong random value in production.');
+  console.error('  WARNING: CONTROL_SERVER_SECRET env var not set!');
+  console.error('  Using INSECURE fallback for development only.');
   console.error('=============================================');
 }
 const CONTROL_SERVER_SECRET_FALLBACK = CONTROL_SERVER_SECRET || 'orbit-control-server-verification-secret-2026';

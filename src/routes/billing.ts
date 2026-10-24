@@ -399,3 +399,112 @@ router.post('/paypal/capture', authenticateJWT, async (req: AuthRequest, res: Re
 });
 
 export default router;
+
+// Stripe Webhook with signature verification
+const stripeWebhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
+
+router.post('/webhooks/stripe', express.raw({ type: 'application/json' }), async (req: Request, res: Response) => {
+  const sig = req.headers.get('stripe-signature') || req.headers.get('Stripe-Signature') || '';
+
+  if (!stripeWebhookSecret) {
+    console.error('[Stripe Webhook] STRIPE_WEBHOOK_SECRET not configured');
+    return res.status(500).json({ error: 'Webhook secret not configured' });
+  }
+
+  if (!sig) {
+    console.warn('[Stripe Webhook] Missing stripe-signature header');
+    return res.status(400).json({ error: 'Missing signature' });
+  }
+
+  if (!stripe) {
+    console.error('[Stripe Webhook] Stripe not configured');
+    return res.status(500).json({ error: 'Stripe not configured' });
+  }
+
+  let event;
+  try {
+    const rawBody = typeof req.body === 'string' ? req.body : Buffer.isBuffer(req.body) ? req.body.toString() : JSON.stringify(req.body);
+    event = stripe.webhooks.constructEvent(rawBody, sig, stripeWebhookSecret);
+  } catch (err: any) {
+    console.error('[Stripe Webhook] Signature verification failed:', err.message);
+    return res.status(400).json({ error: `Webhook signature verification failed: ${err.message}` });
+  }
+
+  console.log(`[Stripe Webhook] Received event: ${event.type}`);
+
+  try {
+    switch (event.type) {
+      case 'checkout.session.completed': {
+        const session = event.data.object as any;
+        const userId = session.metadata?.userId;
+        const planTier = session.metadata?.planTier;
+
+        if (userId && planTier) {
+          const expiresAt = new Date();
+          expiresAt.setMonth(expiresAt.getMonth() + 1);
+
+          await prisma.subscription.upsert({
+            where: { userId },
+            update: {
+              planTier,
+              status: 'active',
+              stripeCustomerId: session.customer as string,
+              stripeSubscriptionId: session.subscription as string,
+              expiresAt,
+            },
+            create: {
+              userId,
+              planTier,
+              status: 'active',
+              stripeCustomerId: session.customer as string,
+              stripeSubscriptionId: session.subscription as string,
+              expiresAt,
+            },
+          });
+
+          await updateUserLicense(userId, planTier);
+          console.log(`[Stripe Webhook] Subscription activated for user ${userId}: ${planTier}`);
+        }
+        break;
+      }
+
+      case 'customer.subscription.updated':
+      case 'customer.subscription.deleted': {
+        const subscription = event.data.object as any;
+        const userId = subscription.metadata?.userId;
+
+        if (userId) {
+          const status = subscription.status === 'active' ? 'active' : 'canceled';
+          await prisma.subscription.update({
+            where: { userId },
+            data: { status },
+          });
+          console.log(`[Stripe Webhook] Subscription ${status} for user ${userId}`);
+        }
+        break;
+      }
+
+      case 'invoice.payment_failed': {
+        const invoice = event.data.object as any;
+        const userId = invoice.metadata?.userId;
+
+        if (userId) {
+          await prisma.subscription.update({
+            where: { userId },
+            data: { status: 'past_due' },
+          });
+          console.log(`[Stripe Webhook] Payment failed for user ${userId}`);
+        }
+        break;
+      }
+
+      default:
+        console.log(`[Stripe Webhook] Unhandled event type: ${event.type}`);
+    }
+
+    res.json({ received: true });
+  } catch (err: any) {
+    console.error('[Stripe Webhook] Error processing event:', err);
+    res.status(500).json({ error: 'Webhook handler failed' });
+  }
+});

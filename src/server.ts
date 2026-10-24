@@ -18,11 +18,31 @@ dns.setDefaultResultOrder('ipv4first');
 const app = express();
 const PORT = process.env.PORT || 5000;
 
-// Security headers (relaxed cross-origin policies to allow Vercel frontend + desktop app)
+// Security headers
 app.use(helmet({
-  crossOriginResourcePolicy: false,
+  crossOriginResourcePolicy: { policy: 'cross-origin' },
   crossOriginEmbedderPolicy: false,
-  crossOriginOpenerPolicy: false,
+  crossOriginOpenerPolicy: { policy: 'same-origin-allow-popups' },
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      scriptSrc: ["'self'", "'unsafe-inline'"],
+      styleSrc: ["'self'", "'unsafe-inline'"],
+      imgSrc: ["'self'", 'data:', 'https:'],
+      fontSrc: ["'self'", 'data:'],
+      connectSrc: ["'self'", 'https://api.resend.com', 'https://*.stripe.com', 'https://*.razorpay.com'],
+      frameSrc: ["'self'", 'https://js.stripe.com', 'https://hooks.stripe.com'],
+      objectSrc: ["'none'"],
+      baseUri: ["'self'"],
+      formAction: ["'self'"],
+    },
+  },
+  referrerPolicy: { policy: 'strict-origin-when-cross-origin' },
+  hsts: {
+    maxAge: 31536000,
+    includeSubDomains: true,
+    preload: true,
+  },
 }));
 
 // Parse any additional comma-separated origins from environment variables
@@ -57,17 +77,22 @@ function isOriginAllowed(origin: string): boolean {
   try {
     const url = new URL(origin);
     const host = url.hostname.toLowerCase();
-    // Allow custom production domain and all subdomains (orbit-sync.dev, www.orbit-sync.dev, api.orbit-sync.dev, etc.)
-    if (host === 'orbit-sync.dev' || host.endsWith('.orbit-sync.dev')) return true;
-    // Allow all Vercel deployments (previews, production, branches)
-    if (host.endsWith('.vercel.app')) return true;
-    // Allow all Render services within the ecosystem
-    if (host.endsWith('.onrender.com')) return true;
+    // Allow exact production domain and specific subdomains only
+    const allowedHosts = [
+      'orbit-sync.dev',
+      'www.orbit-sync.dev',
+      'api.orbit-sync.dev',
+      'relay.orbit-sync.dev',
+    ];
+    if (allowedHosts.includes(host)) return true;
+    // Allow specific Vercel deployment (production only)
+    if (host === 'orbitcollab-three.vercel.app') return true;
+    // Allow specific Render service
+    if (host === 'orbit-server-xbr5.onrender.com') return true;
+    // Allow Tauri desktop app
+    if (host === 'tauri.localhost') return true;
   } catch {
-    // String matching fallback
-    if (origin.includes('orbit-sync.dev') || origin.includes('vercel.app') || origin.includes('onrender.com')) {
-      return true;
-    }
+    return false;
   }
 
   return false;

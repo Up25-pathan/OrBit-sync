@@ -1,13 +1,17 @@
 import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
 import crypto from 'crypto';
+import argon2 from 'argon2';
+import { prisma } from './db';
 
 const JWT_SECRET = process.env.JWT_SECRET;
 if (!JWT_SECRET) {
+  if (process.env.NODE_ENV === 'production') {
+    throw new Error('FATAL: JWT_SECRET environment variable is required in production');
+  }
   console.error('=============================================');
-  console.error('  CRITICAL: JWT_SECRET env var not set!');
-  console.error('  Set a strong random value in production.');
-  console.error('  Using INSECURE fallback for dev only.');
+  console.error('  WARNING: JWT_SECRET env var not set!');
+  console.error('  Using INSECURE fallback for development only.');
   console.error('=============================================');
 }
 const JWT_SECRET_FALLBACK = JWT_SECRET || 'dev-only-insecure-fallback-change-me';
@@ -16,38 +20,59 @@ export interface AuthRequest extends Request {
   user?: {
     id: string;
     email: string;
+    tokenVersion?: number;
   };
 }
 
-export function hashPassword(password: string): string {
-  const salt = crypto.randomBytes(16).toString('hex');
-  const hash = crypto.pbkdf2Sync(password, salt, 1000, 64, 'sha512').toString('hex');
-  return `${salt}:${hash}`;
+export async function hashPassword(password: string): Promise<string> {
+  return argon2.hash(password, {
+    type: argon2.argon2id,
+    memoryCost: 19456,
+    timeCost: 3,
+    parallelism: 1,
+    hashLength: 32,
+  });
 }
 
-export function verifyPassword(password: string, stored: string): boolean {
-  const [salt, hash] = stored.split(':');
-  if (!salt || !hash) return false;
-  const verifyHash = crypto.pbkdf2Sync(password, salt, 1000, 64, 'sha512').toString('hex');
-  const hashBuf = Buffer.from(hash, 'hex');
-  const verifyBuf = Buffer.from(verifyHash, 'hex');
-  if (hashBuf.length !== verifyBuf.length) return false;
-  return crypto.timingSafeEqual(hashBuf, verifyBuf);
+export async function verifyPassword(password: string, stored: string): Promise<boolean> {
+  try {
+    return await argon2.verify(stored, password);
+  } catch {
+    return false;
+  }
 }
 
-export function signToken(payload: { id: string; email: string }): string {
+export async function hashOtpCode(code: string): Promise<string> {
+  return argon2.hash(code, {
+    type: argon2.argon2id,
+    memoryCost: 1024,
+    timeCost: 2,
+    parallelism: 1,
+    hashLength: 16,
+  });
+}
+
+export async function verifyOtpCode(code: string, stored: string): Promise<boolean> {
+  try {
+    return await argon2.verify(stored, code);
+  } catch {
+    return false;
+  }
+}
+
+export function signToken(payload: { id: string; email: string; tokenVersion?: number }): string {
   return jwt.sign(payload, JWT_SECRET_FALLBACK, { expiresIn: '7d' });
 }
 
-export function verifyToken(token: string): { id: string; email: string } | null {
+export function verifyToken(token: string): { id: string; email: string; tokenVersion?: number } | null {
   try {
-    return jwt.verify(token, JWT_SECRET_FALLBACK) as { id: string; email: string };
+    return jwt.verify(token, JWT_SECRET_FALLBACK) as { id: string; email: string; tokenVersion?: number };
   } catch (e) {
     return null;
   }
 }
 
-export function authenticateJWT(req: AuthRequest, res: Response, next: NextFunction) {
+export async function authenticateJWT(req: AuthRequest, res: Response, next: NextFunction) {
   const authHeader = req.headers.authorization;
   
   let token = '';
@@ -71,6 +96,20 @@ export function authenticateJWT(req: AuthRequest, res: Response, next: NextFunct
   const decoded = verifyToken(token);
   if (!decoded) {
     return res.status(403).json({ error: 'Invalid or expired session token.' });
+  }
+
+  // Verify token version matches user's current token version
+  const user = await prisma.user.findUnique({
+    where: { id: decoded.id },
+    select: { tokenVersion: true },
+  });
+
+  if (!user) {
+    return res.status(401).json({ error: 'User not found.' });
+  }
+
+  if (decoded.tokenVersion !== undefined && decoded.tokenVersion !== user.tokenVersion) {
+    return res.status(401).json({ error: 'Session invalidated. Please log in again.' });
   }
 
   req.user = decoded;

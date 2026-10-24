@@ -18,9 +18,13 @@ model User {
   twoFactorEnabled    Boolean       @default(false)
   verificationCode    String?
   verificationExpires DateTime?
+  tokenVersion        Int           @default(0)
   createdAt           DateTime      @default(now())
   subscription        Subscription?
   license             License?
+
+  @@index([verificationCode])
+  @@index([verificationExpires])
 }
 
 model Subscription {

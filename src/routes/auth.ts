@@ -1,36 +1,12 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import crypto from 'crypto';
 import { prisma } from '../db';
-import { hashPassword, verifyPassword, signToken, verifyToken } from '../auth';
+import { hashPassword, verifyPassword, signToken, verifyToken, hashOtpCode, verifyOtpCode } from '../auth';
 import { generateLicenseKey, normalizeTier } from '../utils/licenseGenerator';
+import { createRateLimiter, incrementFailedLogin, resetFailedLogin, isAccountLocked } from '../utils/rateLimiter';
+import { validateRequest, schemas } from '../utils/validation';
 
 const router = Router();
-
-// In-memory rate limiter for auth endpoints (keyed by IP)
-const rateLimitMap = new Map<string, { count: number; resetAt: number }>();
-function rateLimit(maxRequests: number, windowMs: number) {
-  return (req: Request, res: Response, next: NextFunction) => {
-    const ip = req.ip || req.socket.remoteAddress || 'unknown';
-    const now = Date.now();
-    const entry = rateLimitMap.get(ip);
-    if (!entry || now > entry.resetAt) {
-      rateLimitMap.set(ip, { count: 1, resetAt: now + windowMs });
-      return next();
-    }
-    if (entry.count >= maxRequests) {
-      return res.status(429).json({ error: 'Too many requests. Please try again in a minute.' });
-    }
-    entry.count++;
-    next();
-  };
-}
-// Cleanup stale entries every 10 minutes
-setInterval(() => {
-  const now = Date.now();
-  for (const [key, entry] of rateLimitMap) {
-    if (now > entry.resetAt) rateLimitMap.delete(key);
-  }
-}, 600000).unref();
 
 const ALLOWED_ORIGINS = [
   process.env.CLIENT_URL,
@@ -52,10 +28,15 @@ const resolveClientUrl = (req: Request): string => {
   if (state) {
     try {
       const parsed = JSON.parse(Buffer.from(state, 'base64').toString());
-      if (parsed.origin && ALLOWED_ORIGINS.some((o) => parsed.origin.startsWith(o))) {
-        dynamicUrl = parsed.origin;
+      // Validate parsed state structure
+      if (parsed && typeof parsed === 'object' && parsed.origin && typeof parsed.origin === 'string') {
+        if (ALLOWED_ORIGINS.some((o) => parsed.origin.startsWith(o))) {
+          dynamicUrl = parsed.origin;
+        }
       }
-    } catch (e) { }
+    } catch (e) {
+      // Invalid state parameter - ignore and use default
+    }
   }
   return dynamicUrl || process.env.CLIENT_URL || 'http://localhost:3000';
 };
@@ -94,7 +75,7 @@ import { sendVerificationEmail, sendTwoFactorOtpEmail, sendForgotPasswordOtpEmai
 // ----------------------------------------------------
 
 // POST /api/auth/signup
-router.post('/signup', rateLimit(5, 60000), async (req: Request, res: Response) => {
+router.post('/signup', createRateLimiter({ maxRequests: 5, windowMs: 60000, keyPrefix: 'auth:signup' }), validateRequest(schemas.signup), async (req: Request, res: Response) => {
   try {
     const { email, password, displayName } = req.body;
 
@@ -113,22 +94,30 @@ router.post('/signup', rateLimit(5, 60000), async (req: Request, res: Response) 
       where: { email: cleanEmail },
     });
 
-    // Handle existing registered users
+    // Generate cryptographic 6-digit code (100000 - 999999)
+    const code = crypto.randomInt(100000, 1000000).toString();
+    const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes validity
+    const codeHash = await hashOtpCode(code);
+
+    const passwordHash = await hashPassword(cleanPass);
+
     if (existingUser) {
       if (existingUser.isVerified) {
-        return res.status(409).json({ error: 'An account with this email already exists. Please log in.' });
+        // Don't reveal if email exists - send generic response but don't send email
+        return res.status(200).json({
+          status: 'PENDING_VERIFICATION',
+          email: cleanEmail,
+          message: 'If this email is registered, a verification code has been sent.',
+        });
       }
 
       // If user exists but is not verified, refresh verification code and resend
-      const code = crypto.randomInt(100000, 1000000).toString();
-      const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
-
       await prisma.user.update({
         where: { id: existingUser.id },
         data: {
-          verificationCode: code,
+          verificationCode: codeHash,
           verificationExpires: expiresAt,
-          passwordHash: hashPassword(cleanPass),
+          passwordHash,
           displayName: displayName ? displayName.trim() : existingUser.displayName,
         },
       });
@@ -144,18 +133,14 @@ router.post('/signup', rateLimit(5, 60000), async (req: Request, res: Response) 
       });
     }
 
-    // Generate cryptographic 6-digit code (100000 - 999999)
-    const code = crypto.randomInt(100000, 1000000).toString();
-    const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes validity
-
-    // Create unverified user
+    // Create new unverified user
     await prisma.user.create({
       data: {
         email: cleanEmail,
-        passwordHash: hashPassword(cleanPass),
+        passwordHash,
         displayName: displayName ? displayName.trim() : cleanEmail.split('@')[0],
         isVerified: false,
-        verificationCode: code,
+        verificationCode: codeHash,
         verificationExpires: expiresAt,
       },
     });
@@ -178,7 +163,7 @@ router.post('/signup', rateLimit(5, 60000), async (req: Request, res: Response) 
 });
 
 // POST /api/auth/resend-code
-router.post('/resend-code', rateLimit(5, 60000), async (req: Request, res: Response) => {
+router.post('/resend-code', createRateLimiter({ maxRequests: 5, windowMs: 60000, keyPrefix: 'auth:resend' }), validateRequest(schemas.resendCode), async (req: Request, res: Response) => {
   try {
     const { email } = req.body;
 
@@ -198,11 +183,12 @@ router.post('/resend-code', rateLimit(5, 60000), async (req: Request, res: Respo
 
     const code = crypto.randomInt(100000, 1000000).toString();
     const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 mins expiry
+    const codeHash = await hashOtpCode(code);
 
     await prisma.user.update({
       where: { id: user.id },
       data: {
-        verificationCode: code,
+        verificationCode: codeHash,
         verificationExpires: expiresAt,
       },
     });
@@ -230,7 +216,7 @@ router.post('/resend-code', rateLimit(5, 60000), async (req: Request, res: Respo
 });
 
 // POST /api/auth/verify-code
-router.post('/verify-code', rateLimit(10, 60000), async (req: Request, res: Response) => {
+router.post('/verify-code', createRateLimiter({ maxRequests: 10, windowMs: 60000, keyPrefix: 'auth:verify' }), validateRequest(schemas.verifyCode), async (req: Request, res: Response) => {
   try {
     const { email, code } = req.body;
 
@@ -254,7 +240,7 @@ router.post('/verify-code', rateLimit(10, 60000), async (req: Request, res: Resp
     }
 
     // Check code validity
-    if (!user.verificationCode || user.verificationCode !== cleanCode) {
+    if (!user.verificationCode || !(await verifyOtpCode(cleanCode, user.verificationCode))) {
       return res.status(400).json({ error: 'Invalid verification code. Please check your email.' });
     }
 
@@ -277,14 +263,27 @@ router.post('/verify-code', rateLimit(10, 60000), async (req: Request, res: Resp
         },
       });
 
-      const token = signToken({ id: user.id, email: user.email });
+      const token = signToken({ id: user.id, email: user.email, tokenVersion: user.tokenVersion });
 
       res.cookie('orbit_session', token, {
         httpOnly: true,
         secure: process.env.NODE_ENV === 'production',
-        sameSite: 'lax',
+        sameSite: 'strict',
         maxAge: 7 * 24 * 60 * 60 * 1000,
       });
+
+      // Check for enterprise application
+      const enterpriseApp = await (prisma as any).enterpriseApplication.findFirst({
+        where: {
+          OR: [
+            { adminUserId: user.id },
+            { workEmail: user.email },
+          ],
+        },
+      });
+
+      const isEnterprise = enterpriseApp && (enterpriseApp.status === 'APPROVED' || enterpriseApp.status === 'ACTIVE');
+      const effectivePlanTier = isEnterprise ? 'enterprise' : normalizeTier(user.subscription?.planTier || 'free');
 
       return res.status(200).json({
         user: {
@@ -294,8 +293,14 @@ router.post('/verify-code', rateLimit(10, 60000), async (req: Request, res: Resp
           avatarUrl: user.avatarUrl || null,
           role: user.role,
           licenseKey: user.license?.licenseKey || '',
-          planTier: normalizeTier(user.subscription?.planTier || 'free'),
+          planTier: effectivePlanTier,
         },
+        enterpriseApplication: enterpriseApp ? {
+          id: enterpriseApp.id,
+          companyName: enterpriseApp.companyName,
+          companyDomain: enterpriseApp.companyDomain,
+          status: enterpriseApp.status,
+        } : null,
         token,
       });
     }
@@ -349,7 +354,7 @@ router.post('/verify-code', rateLimit(10, 60000), async (req: Request, res: Resp
 });
 
 // POST /api/auth/login
-router.post('/login', rateLimit(10, 60000), async (req: Request, res: Response) => {
+router.post('/login', createRateLimiter({ maxRequests: 10, windowMs: 60000, keyPrefix: 'auth:login' }), validateRequest(schemas.login), async (req: Request, res: Response) => {
   try {
     const { email, password } = req.body;
 
@@ -358,6 +363,11 @@ router.post('/login', rateLimit(10, 60000), async (req: Request, res: Response) 
     }
 
     const cleanEmail = email.trim().toLowerCase();
+
+    // Check if account is locked due to failed login attempts
+    if (await isAccountLocked(cleanEmail, 5)) {
+      return res.status(429).json({ error: 'Account temporarily locked due to multiple failed login attempts. Please try again later.' });
+    }
 
     const user = await prisma.user.findUnique({
       where: { email: cleanEmail },
@@ -372,20 +382,25 @@ router.post('/login', rateLimit(10, 60000), async (req: Request, res: Response) 
     }
 
     // Verify Password
-    const isValidPassword = verifyPassword(password, user.passwordHash);
+    const isValidPassword = await verifyPassword(password, user.passwordHash);
     if (!isValidPassword) {
+      await incrementFailedLogin(cleanEmail);
       return res.status(401).json({ error: 'Invalid email or password.' });
     }
+
+    // Reset failed login attempts on successful password verification
+    await resetFailedLogin(cleanEmail);
 
     // Block unverified logins and dispatch a fresh code
     if (!user.isVerified) {
       const code = crypto.randomInt(100000, 1000000).toString();
       const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 mins expiry
+      const codeHash = await hashOtpCode(code);
 
       await prisma.user.update({
         where: { id: user.id },
         data: {
-          verificationCode: code,
+          verificationCode: codeHash,
           verificationExpires: expiresAt,
         },
       });
@@ -406,11 +421,12 @@ router.post('/login', rateLimit(10, 60000), async (req: Request, res: Response) 
     if (user.twoFactorEnabled) {
       const code = crypto.randomInt(100000, 1000000).toString();
       const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 mins expiry
+      const codeHash = await hashOtpCode(code);
 
       await prisma.user.update({
         where: { id: user.id },
         data: {
-          verificationCode: code,
+          verificationCode: codeHash,
           verificationExpires: expiresAt,
         },
       });
@@ -426,14 +442,27 @@ router.post('/login', rateLimit(10, 60000), async (req: Request, res: Response) 
       });
     }
 
-    const token = signToken({ id: user.id, email: user.email });
+    const token = signToken({ id: user.id, email: user.email, tokenVersion: user.tokenVersion });
 
     res.cookie('orbit_session', token, {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
-      sameSite: 'lax',
+      sameSite: 'strict',
       maxAge: 7 * 24 * 60 * 60 * 1000,
     });
+
+    // Check for enterprise application
+    const enterpriseApp = await (prisma as any).enterpriseApplication.findFirst({
+      where: {
+        OR: [
+          { adminUserId: user.id },
+          { workEmail: user.email },
+        ],
+      },
+    });
+
+    const isEnterprise = enterpriseApp && (enterpriseApp.status === 'APPROVED' || enterpriseApp.status === 'ACTIVE');
+    const effectivePlanTier = isEnterprise ? 'enterprise' : normalizeTier(user.subscription?.planTier || 'free');
 
     return res.status(200).json({
       user: {
@@ -443,8 +472,14 @@ router.post('/login', rateLimit(10, 60000), async (req: Request, res: Response) 
         avatarUrl: user.avatarUrl || null,
         role: user.role,
         licenseKey: user.license?.licenseKey || '',
-        planTier: normalizeTier(user.subscription?.planTier || 'free'),
+        planTier: effectivePlanTier,
       },
+      enterpriseApplication: enterpriseApp ? {
+        id: enterpriseApp.id,
+        companyName: enterpriseApp.companyName,
+        companyDomain: enterpriseApp.companyDomain,
+        status: enterpriseApp.status,
+      } : null,
       token,
     });
 
@@ -459,7 +494,7 @@ router.post('/login', rateLimit(10, 60000), async (req: Request, res: Response) 
 // ----------------------------------------------------
 
 // POST /api/auth/forgot-password/request-otp
-router.post('/forgot-password/request-otp', rateLimit(5, 60000), async (req: Request, res: Response) => {
+router.post('/forgot-password/request-otp', createRateLimiter({ maxRequests: 5, windowMs: 60000, keyPrefix: 'auth:forgot' }), validateRequest(schemas.forgotPasswordRequest), async (req: Request, res: Response) => {
   try {
     const { email } = req.body;
 
@@ -479,11 +514,12 @@ router.post('/forgot-password/request-otp', rateLimit(5, 60000), async (req: Req
 
     const code = crypto.randomInt(100000, 1000000).toString();
     const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes expiry
+    const codeHash = await hashOtpCode(code);
 
     await prisma.user.update({
       where: { id: user.id },
       data: {
-        verificationCode: code,
+        verificationCode: codeHash,
         verificationExpires: expiresAt,
       },
     });
@@ -504,7 +540,7 @@ router.post('/forgot-password/request-otp', rateLimit(5, 60000), async (req: Req
 });
 
 // POST /api/auth/forgot-password/reset
-router.post('/forgot-password/reset', rateLimit(5, 60000), async (req: Request, res: Response) => {
+router.post('/forgot-password/reset', createRateLimiter({ maxRequests: 5, windowMs: 60000, keyPrefix: 'auth:reset' }), validateRequest(schemas.forgotPasswordReset), async (req: Request, res: Response) => {
   try {
     const { email, code, newPassword } = req.body;
 
@@ -528,7 +564,7 @@ router.post('/forgot-password/reset', rateLimit(5, 60000), async (req: Request, 
       return res.status(404).json({ error: 'Account not found.' });
     }
 
-    if (!user.verificationCode || user.verificationCode !== cleanCode) {
+    if (!user.verificationCode || !(await verifyOtpCode(cleanCode, user.verificationCode))) {
       return res.status(400).json({ error: 'Invalid verification code. Please check your email.' });
     }
 
@@ -536,7 +572,7 @@ router.post('/forgot-password/reset', rateLimit(5, 60000), async (req: Request, 
       return res.status(400).json({ error: 'Verification code has expired. Please request a new one.' });
     }
 
-    const newPasswordHash = hashPassword(cleanNewPass);
+    const newPasswordHash = await hashPassword(cleanNewPass);
 
     await prisma.user.update({
       where: { id: user.id },
@@ -544,12 +580,13 @@ router.post('/forgot-password/reset', rateLimit(5, 60000), async (req: Request, 
         passwordHash: newPasswordHash,
         verificationCode: null,
         verificationExpires: null,
+        tokenVersion: { increment: 1 },
       },
     });
 
     return res.status(200).json({
       status: 'PASSWORD_RESET_SUCCESS',
-      message: 'Password reset successfully! You can now log in with your new password.',
+      message: 'Password reset successfully! All sessions have been invalidated. Please log in with your new password.',
     });
   } catch (error: any) {
     console.error('Password reset confirmation error:', error);
@@ -805,6 +842,19 @@ router.get('/me', async (req: Request, res: Response) => {
       return res.status(404).json({ error: 'User profile not found.' });
     }
 
+    // Check for enterprise application
+    const enterpriseApp = await (prisma as any).enterpriseApplication.findFirst({
+      where: {
+        OR: [
+          { adminUserId: user.id },
+          { workEmail: user.email },
+        ],
+      },
+    });
+
+    const isEnterprise = enterpriseApp && (enterpriseApp.status === 'APPROVED' || enterpriseApp.status === 'ACTIVE');
+    const effectivePlanTier = isEnterprise ? 'enterprise' : normalizeTier(user.subscription?.planTier || 'free');
+
     return res.status(200).json({
       user: {
         id: user.id,
@@ -813,8 +863,14 @@ router.get('/me', async (req: Request, res: Response) => {
         avatarUrl: user.avatarUrl || null,
         role: user.role,
         licenseKey: user.license?.licenseKey || '',
-        planTier: normalizeTier(user.subscription?.planTier || 'free'),
+        planTier: effectivePlanTier,
       },
+      enterpriseApplication: enterpriseApp ? {
+        id: enterpriseApp.id,
+        companyName: enterpriseApp.companyName,
+        companyDomain: enterpriseApp.companyDomain,
+        status: enterpriseApp.status,
+      } : null,
     });
   } catch (error: any) {
     return res.status(401).json({ error: 'Unauthorized profile access.' });
@@ -879,7 +935,7 @@ router.post('/enterprise/check-domain', async (req: Request, res: Response) => {
 });
 
 // POST /api/auth/enterprise/send-signup-otp
-router.post('/enterprise/send-signup-otp', rateLimit(5, 60000), async (req: Request, res: Response) => {
+router.post('/enterprise/send-signup-otp', createRateLimiter({ maxRequests: 5, windowMs: 60000, keyPrefix: 'enterprise:signup' }), validateRequest(schemas.enterpriseSendSignupOtp), async (req: Request, res: Response) => {
   try {
     const { companyName, workEmail, adminName } = req.body;
 
@@ -911,6 +967,7 @@ router.post('/enterprise/send-signup-otp', rateLimit(5, 60000), async (req: Requ
     // Generate 6-digit OTP code
     const code = crypto.randomInt(100000, 1000000).toString();
     const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
+    const codeHash = await hashOtpCode(code);
 
     const existingUser = await prisma.user.findUnique({ where: { email: cleanEmail } });
 
@@ -918,7 +975,7 @@ router.post('/enterprise/send-signup-otp', rateLimit(5, 60000), async (req: Requ
       await prisma.user.update({
         where: { id: existingUser.id },
         data: {
-          verificationCode: code,
+          verificationCode: codeHash,
           verificationExpires: expiresAt,
           displayName: adminName ? adminName.trim() : existingUser.displayName,
           role: 'USER', // Strictly USER, never ADMIN
@@ -927,14 +984,15 @@ router.post('/enterprise/send-signup-otp', rateLimit(5, 60000), async (req: Requ
     } else {
       // Store pending verification user with isVerified: false, role: 'USER'
       // No license is generated before verification or approval!
+      const passwordHash = await hashPassword(crypto.randomBytes(32).toString('hex'));
       await prisma.user.create({
         data: {
           email: cleanEmail,
           displayName: adminName ? adminName.trim() : cleanEmail.split('@')[0],
-          passwordHash: hashPassword(crypto.randomBytes(32).toString('hex')),
+          passwordHash,
           isVerified: false,
           role: 'USER', // Strictly USER, never ADMIN
-          verificationCode: code,
+          verificationCode: codeHash,
           verificationExpires: expiresAt,
         },
       });
@@ -958,7 +1016,7 @@ router.post('/enterprise/send-signup-otp', rateLimit(5, 60000), async (req: Requ
 });
 
 // POST /api/auth/enterprise/verify-signup-otp
-router.post('/enterprise/verify-signup-otp', rateLimit(10, 60000), async (req: Request, res: Response) => {
+router.post('/enterprise/verify-signup-otp', createRateLimiter({ maxRequests: 10, windowMs: 60000, keyPrefix: 'enterprise:verify' }), validateRequest(schemas.enterpriseVerifySignupOtp), async (req: Request, res: Response) => {
   try {
     const {
       code,
@@ -994,7 +1052,7 @@ router.post('/enterprise/verify-signup-otp', rateLimit(10, 60000), async (req: R
     }
 
     // Validate OTP Code
-    if (!user.verificationCode || user.verificationCode !== cleanCode) {
+    if (!user.verificationCode || !(await verifyOtpCode(cleanCode, user.verificationCode))) {
       return res.status(400).json({ error: 'Invalid verification code. Please check your email.' });
     }
 
@@ -1012,7 +1070,7 @@ router.post('/enterprise/verify-signup-otp', rateLimit(10, 60000), async (req: R
       verificationExpires: null,
     };
     if (password && String(password).trim().length >= 6) {
-      userUpdateData.passwordHash = hashPassword(String(password).trim());
+      userUpdateData.passwordHash = await hashPassword(String(password).trim());
     }
 
     const updatedUser = await prisma.user.update({
@@ -1117,7 +1175,7 @@ router.post('/enterprise/verify-signup-otp', rateLimit(10, 60000), async (req: R
 });
 
 // POST /api/auth/enterprise/send-login-otp
-router.post('/enterprise/send-login-otp', rateLimit(5, 60000), async (req: Request, res: Response) => {
+router.post('/enterprise/send-login-otp', createRateLimiter({ maxRequests: 5, windowMs: 60000, keyPrefix: 'enterprise:login' }), validateRequest(schemas.enterpriseSendLoginOtp), async (req: Request, res: Response) => {
   try {
     const { workEmail } = req.body;
 
@@ -1154,18 +1212,20 @@ router.post('/enterprise/send-login-otp', rateLimit(5, 60000), async (req: Reque
     // Generate 6-digit OTP code
     const code = crypto.randomInt(100000, 1000000).toString();
     const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
+    const codeHash = await hashOtpCode(code);
 
     let targetUserId = user ? user.id : null;
     if (!user) {
       // If user doesn't exist yet but application does, create the user with role 'USER'
+      const passwordHash = await hashPassword(crypto.randomBytes(32).toString('hex'));
       const newUser = await prisma.user.create({
         data: {
           email: cleanEmail,
           displayName: app?.adminName || cleanEmail.split('@')[0],
-          passwordHash: hashPassword(crypto.randomBytes(32).toString('hex')),
+          passwordHash,
           isVerified: false,
           role: 'USER', // Strictly USER, never ADMIN
-          verificationCode: code,
+          verificationCode: codeHash,
           verificationExpires: expiresAt,
         },
       });
@@ -1180,7 +1240,7 @@ router.post('/enterprise/send-login-otp', rateLimit(5, 60000), async (req: Reque
       await prisma.user.update({
         where: { id: user.id },
         data: {
-          verificationCode: code,
+          verificationCode: codeHash,
           verificationExpires: expiresAt,
           role: 'USER', // Ensure strictly USER
         },
@@ -1207,7 +1267,7 @@ router.post('/enterprise/send-login-otp', rateLimit(5, 60000), async (req: Reque
 });
 
 // POST /api/auth/enterprise/verify-login-otp
-router.post('/enterprise/verify-login-otp', rateLimit(10, 60000), async (req: Request, res: Response) => {
+router.post('/enterprise/verify-login-otp', createRateLimiter({ maxRequests: 10, windowMs: 60000, keyPrefix: 'enterprise:verify-login' }), validateRequest(schemas.enterpriseVerifyLoginOtp), async (req: Request, res: Response) => {
   try {
     const { workEmail, code } = req.body;
 
@@ -1231,7 +1291,7 @@ router.post('/enterprise/verify-login-otp', rateLimit(10, 60000), async (req: Re
     }
 
     // Validate code
-    if (!user.verificationCode || user.verificationCode !== cleanCode) {
+    if (!user.verificationCode || !(await verifyOtpCode(cleanCode, user.verificationCode))) {
       return res.status(400).json({ error: 'Invalid login code. Please check your email.' });
     }
 
@@ -1312,7 +1372,7 @@ router.post('/enterprise/verify-login-otp', rateLimit(10, 60000), async (req: Re
 });
 
 // POST /api/auth/enterprise/register (Enforces OTP Verification)
-router.post('/enterprise/register', rateLimit(5, 60000), async (req: Request, res: Response) => {
+router.post('/enterprise/register', createRateLimiter({ maxRequests: 5, windowMs: 60000, keyPrefix: 'enterprise:register' }), validateRequest(schemas.enterpriseRegister), async (req: Request, res: Response) => {
   try {
     const {
       companyName,
@@ -1359,26 +1419,30 @@ router.post('/enterprise/register', rateLimit(5, 60000), async (req: Request, re
     if (!code) {
       const generatedOtp = crypto.randomInt(100000, 1000000).toString();
       const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
+      const otpHash = await hashOtpCode(generatedOtp);
 
       const existingUser = await prisma.user.findUnique({ where: { email: cleanEmail } });
       if (existingUser) {
         await prisma.user.update({
           where: { id: existingUser.id },
           data: {
-            verificationCode: generatedOtp,
+            verificationCode: otpHash,
             verificationExpires: expiresAt,
             role: 'USER',
           },
         });
       } else {
+        const passwordHash = password
+          ? await hashPassword(String(password).trim())
+          : await hashPassword(crypto.randomBytes(32).toString('hex'));
         await prisma.user.create({
           data: {
             email: cleanEmail,
             displayName: adminName.trim(),
-            passwordHash: password ? hashPassword(String(password).trim()) : hashPassword(crypto.randomBytes(32).toString('hex')),
+            passwordHash,
             isVerified: false,
             role: 'USER', // Strictly USER, never ADMIN
-            verificationCode: generatedOtp,
+            verificationCode: otpHash,
             verificationExpires: expiresAt,
           },
         });
@@ -1402,7 +1466,8 @@ router.post('/enterprise/register', rateLimit(5, 60000), async (req: Request, re
       return res.status(404).json({ error: 'Registration session not found. Please request a new verification code.' });
     }
 
-    if (!user.verificationCode || user.verificationCode !== String(code).trim()) {
+    const cleanCode = String(code).trim();
+    if (!user.verificationCode || !(await verifyOtpCode(cleanCode, user.verificationCode))) {
       return res.status(400).json({ error: 'Invalid verification code. Please check your email.' });
     }
 
@@ -1411,7 +1476,9 @@ router.post('/enterprise/register', rateLimit(5, 60000), async (req: Request, re
     }
 
     // Activate User with role 'USER'
-    const passwordHash = password ? hashPassword(String(password).trim()) : user.passwordHash;
+    const passwordHash = password
+      ? await hashPassword(String(password).trim())
+      : user.passwordHash;
     const updatedUser = await prisma.user.update({
       where: { id: user.id },
       data: {
