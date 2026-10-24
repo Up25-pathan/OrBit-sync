@@ -14,12 +14,12 @@ function getRedis(): Redis | null {
   try {
     redis = new Redis(redisUrl, {
       maxRetriesPerRequest: 3,
-      retryStrategy: (times) => Math.min(times * 100, 3000),
+      retryStrategy: (times: number) => Math.min(times * 100, 3000),
       lazyConnect: true,
     });
 
-    redis.on('error', (err) => {
-      console.error('[RateLimiter] Redis connection error:', err.message);
+    redis.on('error', (err: any) => {
+      console.error('[RateLimiter] Redis connection error:', err?.message || err);
     });
 
     redis.on('connect', () => {
@@ -28,7 +28,7 @@ function getRedis(): Redis | null {
 
     redis.connect().catch(() => {});
     return redis;
-  } catch (err) {
+  } catch (err: any) {
     console.error('[RateLimiter] Failed to initialize Redis:', err);
     return null;
   }
