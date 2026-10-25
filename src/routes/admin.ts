@@ -1822,5 +1822,102 @@ router.post('/enterprises/:id/reactivate', requireAdmin, async (req: AdminAuthRe
   }
 });
 
+// DELETE /api/v1/admin/enterprises/:id - Permanently delete and wipe all organization data
+router.delete('/enterprises/:id', requireAdmin, async (req: AdminAuthRequest, res: Response) => {
+  try {
+    const { id } = req.params;
+    const enterprise = await (prisma as any).enterpriseApplication.findUnique({ where: { id } });
+    if (!enterprise) return res.status(404).json({ error: 'Enterprise organization not found.' });
+
+    const companyName = enterprise.companyName;
+    const companyDomain = enterprise.companyDomain;
+    const workEmail = enterprise.workEmail;
+
+    // Find all non-admin users associated with this enterprise (by workEmail or domain)
+    const associatedUsers = await prisma.user.findMany({
+      where: {
+        AND: [
+          { role: { not: 'ADMIN' } }, // NEVER delete platform ADMIN accounts
+          {
+            OR: [
+              ...(enterprise.adminUserId ? [{ id: enterprise.adminUserId }] : []),
+              { email: workEmail },
+              ...(companyDomain ? [{ email: { endsWith: `@${companyDomain}` } }] : []),
+            ],
+          },
+        ],
+      },
+      select: { id: true, email: true },
+    });
+
+    const userIds = associatedUsers.map((u: any) => u.id);
+
+    // Perform atomic wipe transaction
+    await prisma.$transaction(async (tx: any) => {
+      // 1. Wipe all paired devices and licenses for associated non-admin users
+      if (userIds.length > 0) {
+        await tx.device.deleteMany({
+          where: {
+            license: {
+              userId: { in: userIds },
+            },
+          },
+        });
+
+        await tx.license.deleteMany({
+          where: {
+            userId: { in: userIds },
+          },
+        });
+
+        await tx.subscription.deleteMany({
+          where: {
+            userId: { in: userIds },
+          },
+        });
+
+        await tx.user.deleteMany({
+          where: {
+            id: { in: userIds },
+          },
+        });
+      }
+
+      // 2. Wipe the EnterpriseApplication record
+      await (tx as any).enterpriseApplication.delete({
+        where: { id },
+      });
+    });
+
+    // 3. Log security audit event
+    await logAuditEvent({
+      adminUserId: req.adminUser!.id,
+      adminEmail: req.adminUser!.email,
+      action: 'DELETE /api/v1/admin/enterprises/:id',
+      targetType: 'enterprise',
+      targetId: id,
+      details: {
+        companyName,
+        companyDomain,
+        workEmail,
+        wipedUserCount: userIds.length,
+        wipedEmails: associatedUsers.map((u: any) => u.email),
+      },
+      ipAddress: req.ip,
+      userAgent: req.headers['user-agent'],
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: `Organization "${companyName}" and all associated data, licenses, and devices have been permanently wiped.`,
+      wipedEnterpriseId: id,
+      wipedUsersCount: userIds.length,
+    });
+  } catch (err: any) {
+    console.error('[Admin] Failed to wipe enterprise organization:', err);
+    return res.status(500).json({ error: 'Failed to delete organization: ' + (err.message || 'Server error') });
+  }
+});
+
 export default router;
 
