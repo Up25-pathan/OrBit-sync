@@ -285,6 +285,22 @@ router.post('/verify-code', createRateLimiter({ maxRequests: 10, windowMs: 60000
       const isEnterprise = enterpriseApp && (enterpriseApp.status === 'APPROVED' || enterpriseApp.status === 'ACTIVE');
       const effectivePlanTier = isEnterprise ? 'enterprise' : normalizeTier(user.subscription?.planTier || 'free');
 
+      let userLicense = user.license;
+      if (!userLicense && !isEnterprise) {
+        try {
+          const generatedKey = generateLicenseKey();
+          userLicense = await prisma.license.create({
+            data: {
+              userId: user.id,
+              licenseKey: generatedKey,
+              maxDevices: user.role === 'ADMIN' ? 20 : 3,
+            },
+          });
+        } catch (licErr) {
+          console.warn('Auto-license provisioning note:', licErr);
+        }
+      }
+
       return res.status(200).json({
         user: {
           id: user.id,
@@ -292,7 +308,7 @@ router.post('/verify-code', createRateLimiter({ maxRequests: 10, windowMs: 60000
           displayName: user.displayName || user.email.split('@')[0],
           avatarUrl: user.avatarUrl || null,
           role: user.role,
-          licenseKey: user.license?.licenseKey || '',
+          licenseKey: userLicense?.licenseKey || '',
           planTier: effectivePlanTier,
         },
         enterpriseApplication: enterpriseApp ? {
@@ -464,6 +480,22 @@ router.post('/login', createRateLimiter({ maxRequests: 10, windowMs: 60000, keyP
     const isEnterprise = enterpriseApp && (enterpriseApp.status === 'APPROVED' || enterpriseApp.status === 'ACTIVE');
     const effectivePlanTier = isEnterprise ? 'enterprise' : normalizeTier(user.subscription?.planTier || 'free');
 
+    let userLicense = user.license;
+    if (!userLicense && !isEnterprise) {
+      try {
+        const generatedKey = generateLicenseKey();
+        userLicense = await prisma.license.create({
+          data: {
+            userId: user.id,
+            licenseKey: generatedKey,
+            maxDevices: user.role === 'ADMIN' ? 20 : 3,
+          },
+        });
+      } catch (licErr) {
+        console.warn('Auto-license provisioning note:', licErr);
+      }
+    }
+
     return res.status(200).json({
       user: {
         id: user.id,
@@ -471,7 +503,7 @@ router.post('/login', createRateLimiter({ maxRequests: 10, windowMs: 60000, keyP
         displayName: user.displayName || user.email.split('@')[0],
         avatarUrl: user.avatarUrl || null,
         role: user.role,
-        licenseKey: user.license?.licenseKey || '',
+        licenseKey: userLicense?.licenseKey || '',
         planTier: effectivePlanTier,
       },
       enterpriseApplication: enterpriseApp ? {
@@ -855,6 +887,22 @@ router.get('/me', async (req: Request, res: Response) => {
     const isEnterprise = enterpriseApp && (enterpriseApp.status === 'APPROVED' || enterpriseApp.status === 'ACTIVE');
     const effectivePlanTier = isEnterprise ? 'enterprise' : normalizeTier(user.subscription?.planTier || 'free');
 
+    let userLicense = user.license;
+    if (!userLicense && !isEnterprise) {
+      try {
+        const generatedKey = generateLicenseKey();
+        userLicense = await prisma.license.create({
+          data: {
+            userId: user.id,
+            licenseKey: generatedKey,
+            maxDevices: user.role === 'ADMIN' ? 20 : 3,
+          },
+        });
+      } catch (licErr) {
+        console.warn('Auto-license provisioning note:', licErr);
+      }
+    }
+
     return res.status(200).json({
       user: {
         id: user.id,
@@ -862,7 +910,7 @@ router.get('/me', async (req: Request, res: Response) => {
         displayName: user.displayName || user.email.split('@')[0],
         avatarUrl: user.avatarUrl || null,
         role: user.role,
-        licenseKey: user.license?.licenseKey || '',
+        licenseKey: userLicense?.licenseKey || '',
         planTier: effectivePlanTier,
       },
       enterpriseApplication: enterpriseApp ? {

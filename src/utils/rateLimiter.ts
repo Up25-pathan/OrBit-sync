@@ -1,13 +1,17 @@
 import Redis from 'ioredis';
 
 let redis: Redis | null = null;
+let hasWarnedRedis = false;
 
 function getRedis(): Redis | null {
   if (redis) return redis;
 
   const redisUrl = process.env.REDIS_URL;
   if (!redisUrl) {
-    console.warn('[RateLimiter] REDIS_URL not configured, rate limiting will be disabled');
+    if (!hasWarnedRedis) {
+      console.warn('[RateLimiter] REDIS_URL not configured, rate limiting will be disabled (in-memory pass-through)');
+      hasWarnedRedis = true;
+    }
     return null;
   }
 
