@@ -5,8 +5,8 @@ import { createRateLimiter } from '../utils/rateLimiter';
 const router = Router();
 
 // Rate limiter for telemetry endpoints (per IP)
-const telemetryRateLimit = createRateLimiter({ maxRequests: 50, windowMs: 60000, keyPrefix: 'telemetry' });
-const feedbackRateLimit = createRateLimiter({ maxRequests: 20, windowMs: 60000, keyPrefix: 'feedback' });
+const telemetryRateLimit = createRateLimiter({ maxRequests: 1000, windowMs: 60000, keyPrefix: 'telemetry' });
+const feedbackRateLimit = createRateLimiter({ maxRequests: 500, windowMs: 60000, keyPrefix: 'feedback' });
 
 /**
  * POST /api/telemetry/crash

@@ -75,7 +75,7 @@ import { sendVerificationEmail, sendTwoFactorOtpEmail, sendForgotPasswordOtpEmai
 // ----------------------------------------------------
 
 // POST /api/auth/signup
-router.post('/signup', createRateLimiter({ maxRequests: 5, windowMs: 60000, keyPrefix: 'auth:signup' }), validateRequest(schemas.signup), async (req: Request, res: Response) => {
+router.post('/signup', createRateLimiter({ maxRequests: 300, windowMs: 60000, keyPrefix: 'auth:signup' }), validateRequest(schemas.signup), async (req: Request, res: Response) => {
   try {
     const { email, password, displayName } = req.body;
 
@@ -163,7 +163,7 @@ router.post('/signup', createRateLimiter({ maxRequests: 5, windowMs: 60000, keyP
 });
 
 // POST /api/auth/resend-code
-router.post('/resend-code', createRateLimiter({ maxRequests: 5, windowMs: 60000, keyPrefix: 'auth:resend' }), validateRequest(schemas.resendCode), async (req: Request, res: Response) => {
+router.post('/resend-code', createRateLimiter({ maxRequests: 200, windowMs: 60000, keyPrefix: 'auth:resend' }), validateRequest(schemas.resendCode), async (req: Request, res: Response) => {
   try {
     const { email } = req.body;
 
@@ -216,7 +216,7 @@ router.post('/resend-code', createRateLimiter({ maxRequests: 5, windowMs: 60000,
 });
 
 // POST /api/auth/verify-code
-router.post('/verify-code', createRateLimiter({ maxRequests: 10, windowMs: 60000, keyPrefix: 'auth:verify' }), validateRequest(schemas.verifyCode), async (req: Request, res: Response) => {
+router.post('/verify-code', createRateLimiter({ maxRequests: 300, windowMs: 60000, keyPrefix: 'auth:verify' }), validateRequest(schemas.verifyCode), async (req: Request, res: Response) => {
   try {
     const { email, code } = req.body;
 
@@ -370,7 +370,7 @@ router.post('/verify-code', createRateLimiter({ maxRequests: 10, windowMs: 60000
 });
 
 // POST /api/auth/login
-router.post('/login', createRateLimiter({ maxRequests: 10, windowMs: 60000, keyPrefix: 'auth:login' }), validateRequest(schemas.login), async (req: Request, res: Response) => {
+router.post('/login', createRateLimiter({ maxRequests: 500, windowMs: 60000, keyPrefix: 'auth:login' }), validateRequest(schemas.login), async (req: Request, res: Response) => {
   try {
     const { email, password } = req.body;
 
@@ -380,8 +380,8 @@ router.post('/login', createRateLimiter({ maxRequests: 10, windowMs: 60000, keyP
 
     const cleanEmail = email.trim().toLowerCase();
 
-    // Check if account is locked due to failed login attempts
-    if (await isAccountLocked(cleanEmail, 5)) {
+    // Check if account is locked due to failed login attempts (high threshold to prevent accidental lockouts)
+    if (await isAccountLocked(cleanEmail, 50)) {
       return res.status(429).json({ error: 'Account temporarily locked due to multiple failed login attempts. Please try again later.' });
     }
 
@@ -526,7 +526,7 @@ router.post('/login', createRateLimiter({ maxRequests: 10, windowMs: 60000, keyP
 // ----------------------------------------------------
 
 // POST /api/auth/forgot-password/request-otp
-router.post('/forgot-password/request-otp', createRateLimiter({ maxRequests: 5, windowMs: 60000, keyPrefix: 'auth:forgot' }), validateRequest(schemas.forgotPasswordRequest), async (req: Request, res: Response) => {
+router.post('/forgot-password/request-otp', createRateLimiter({ maxRequests: 200, windowMs: 60000, keyPrefix: 'auth:forgot' }), validateRequest(schemas.forgotPasswordRequest), async (req: Request, res: Response) => {
   try {
     const { email } = req.body;
 
@@ -572,7 +572,7 @@ router.post('/forgot-password/request-otp', createRateLimiter({ maxRequests: 5, 
 });
 
 // POST /api/auth/forgot-password/reset
-router.post('/forgot-password/reset', createRateLimiter({ maxRequests: 5, windowMs: 60000, keyPrefix: 'auth:reset' }), validateRequest(schemas.forgotPasswordReset), async (req: Request, res: Response) => {
+router.post('/forgot-password/reset', createRateLimiter({ maxRequests: 200, windowMs: 60000, keyPrefix: 'auth:reset' }), validateRequest(schemas.forgotPasswordReset), async (req: Request, res: Response) => {
   try {
     const { email, code, newPassword } = req.body;
 
@@ -983,7 +983,7 @@ router.post('/enterprise/check-domain', async (req: Request, res: Response) => {
 });
 
 // POST /api/auth/enterprise/send-signup-otp
-router.post('/enterprise/send-signup-otp', createRateLimiter({ maxRequests: 5, windowMs: 60000, keyPrefix: 'enterprise:signup' }), validateRequest(schemas.enterpriseSendSignupOtp), async (req: Request, res: Response) => {
+router.post('/enterprise/send-signup-otp', createRateLimiter({ maxRequests: 200, windowMs: 60000, keyPrefix: 'enterprise:signup' }), validateRequest(schemas.enterpriseSendSignupOtp), async (req: Request, res: Response) => {
   try {
     const { companyName, workEmail, adminName } = req.body;
 
@@ -1064,7 +1064,7 @@ router.post('/enterprise/send-signup-otp', createRateLimiter({ maxRequests: 5, w
 });
 
 // POST /api/auth/enterprise/verify-signup-otp
-router.post('/enterprise/verify-signup-otp', createRateLimiter({ maxRequests: 10, windowMs: 60000, keyPrefix: 'enterprise:verify' }), validateRequest(schemas.enterpriseVerifySignupOtp), async (req: Request, res: Response) => {
+router.post('/enterprise/verify-signup-otp', createRateLimiter({ maxRequests: 300, windowMs: 60000, keyPrefix: 'enterprise:verify' }), validateRequest(schemas.enterpriseVerifySignupOtp), async (req: Request, res: Response) => {
   try {
     const {
       code,
@@ -1223,7 +1223,7 @@ router.post('/enterprise/verify-signup-otp', createRateLimiter({ maxRequests: 10
 });
 
 // POST /api/auth/enterprise/send-login-otp
-router.post('/enterprise/send-login-otp', createRateLimiter({ maxRequests: 5, windowMs: 60000, keyPrefix: 'enterprise:login' }), validateRequest(schemas.enterpriseSendLoginOtp), async (req: Request, res: Response) => {
+router.post('/enterprise/send-login-otp', createRateLimiter({ maxRequests: 200, windowMs: 60000, keyPrefix: 'enterprise:login' }), validateRequest(schemas.enterpriseSendLoginOtp), async (req: Request, res: Response) => {
   try {
     const { workEmail } = req.body;
 
@@ -1315,7 +1315,7 @@ router.post('/enterprise/send-login-otp', createRateLimiter({ maxRequests: 5, wi
 });
 
 // POST /api/auth/enterprise/verify-login-otp
-router.post('/enterprise/verify-login-otp', createRateLimiter({ maxRequests: 10, windowMs: 60000, keyPrefix: 'enterprise:verify-login' }), validateRequest(schemas.enterpriseVerifyLoginOtp), async (req: Request, res: Response) => {
+router.post('/enterprise/verify-login-otp', createRateLimiter({ maxRequests: 300, windowMs: 60000, keyPrefix: 'enterprise:verify-login' }), validateRequest(schemas.enterpriseVerifyLoginOtp), async (req: Request, res: Response) => {
   try {
     const { workEmail, code } = req.body;
 
@@ -1420,7 +1420,7 @@ router.post('/enterprise/verify-login-otp', createRateLimiter({ maxRequests: 10,
 });
 
 // POST /api/auth/enterprise/register (Enforces OTP Verification)
-router.post('/enterprise/register', createRateLimiter({ maxRequests: 5, windowMs: 60000, keyPrefix: 'enterprise:register' }), validateRequest(schemas.enterpriseRegister), async (req: Request, res: Response) => {
+router.post('/enterprise/register', createRateLimiter({ maxRequests: 200, windowMs: 60000, keyPrefix: 'enterprise:register' }), validateRequest(schemas.enterpriseRegister), async (req: Request, res: Response) => {
   try {
     const {
       companyName,
