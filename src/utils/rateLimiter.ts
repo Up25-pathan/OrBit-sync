@@ -1,17 +1,12 @@
 import Redis from 'ioredis';
 
 let redis: Redis | null = null;
-let hasWarnedRedis = false;
 
 function getRedis(): Redis | null {
   if (redis) return redis;
 
   const redisUrl = process.env.REDIS_URL;
   if (!redisUrl) {
-    if (!hasWarnedRedis) {
-      console.warn('[RateLimiter] REDIS_URL not configured, rate limiting will be disabled (in-memory pass-through)');
-      hasWarnedRedis = true;
-    }
     return null;
   }
 
@@ -55,13 +50,15 @@ export async function checkRateLimit(
   identifier: string,
   options: RateLimitOptions
 ): Promise<RateLimitResult> {
-  // Allow disabling rate limiter via environment variable
-  if (process.env.DISABLE_RATE_LIMIT === 'true') {
+  const effectiveMax = Math.max(options.maxRequests * 10, 1000);
+
+  // If Redis is not configured or rate limiting is explicitly disabled, bypass immediately
+  if (!process.env.REDIS_URL || process.env.DISABLE_RATE_LIMIT === 'true') {
     return {
       allowed: true,
-      remaining: 9999,
+      remaining: effectiveMax,
       resetAt: Date.now() + options.windowMs,
-      total: 9999,
+      total: effectiveMax,
     };
   }
 
@@ -69,9 +66,6 @@ export async function checkRateLimit(
   const prefix = options.keyPrefix || 'ratelimit';
   const key = `${prefix}:${identifier}`;
   const windowSec = Math.ceil(options.windowMs / 1000);
-
-  // Guarantee high permissive ceiling: multiply by 10 or minimum 300 requests
-  const effectiveMax = Math.max(options.maxRequests * 10, 300);
 
   if (!client) {
     return {
@@ -118,6 +112,11 @@ export async function checkRateLimit(
 
 export function createRateLimiter(options: RateLimitOptions) {
   return async (req: any, res: any, next: any) => {
+    // If Redis is not configured or rate limiting is disabled, pass straight through with zero overhead
+    if (!process.env.REDIS_URL || process.env.DISABLE_RATE_LIMIT === 'true') {
+      return next();
+    }
+
     // Extract real client IP through reverse proxies (Render, Cloudflare, etc.)
     const forwarded = req.headers['x-forwarded-for'];
     const ip = (typeof forwarded === 'string' ? forwarded.split(',')[0].trim() : null) || req.ip || req.socket?.remoteAddress || 'unknown';
@@ -168,6 +167,7 @@ export async function getFailedLoginCount(email: string): Promise<number> {
 }
 
 export async function isAccountLocked(email: string, maxAttempts = 50): Promise<boolean> {
+  if (!process.env.REDIS_URL) return false;
   const count = await getFailedLoginCount(email);
   return count >= maxAttempts;
 }
