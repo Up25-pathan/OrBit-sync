@@ -263,7 +263,7 @@ router.post('/verify-code', createRateLimiter({ maxRequests: 300, windowMs: 6000
         },
       });
 
-      const token = signToken({ id: user.id, email: user.email, tokenVersion: user.tokenVersion });
+      const token = signToken({ id: user.id, email: user.email, tokenVersion: (user as any).tokenVersion });
 
       res.cookie('orbit_session', token, {
         httpOnly: true,
@@ -458,7 +458,7 @@ router.post('/login', createRateLimiter({ maxRequests: 500, windowMs: 60000, key
       });
     }
 
-    const token = signToken({ id: user.id, email: user.email, tokenVersion: user.tokenVersion });
+    const token = signToken({ id: user.id, email: user.email, tokenVersion: (user as any).tokenVersion });
 
     res.cookie('orbit_session', token, {
       httpOnly: true,
@@ -606,7 +606,7 @@ router.post('/forgot-password/reset', createRateLimiter({ maxRequests: 200, wind
 
     const newPasswordHash = await hashPassword(cleanNewPass);
 
-    await prisma.user.update({
+    await (prisma.user as any).update({
       where: { id: user.id },
       data: {
         passwordHash: newPasswordHash,

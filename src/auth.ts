@@ -96,7 +96,7 @@ export async function authenticateJWT(req: AuthRequest, res: Response, next: Nex
   }
 
   // Verify token version matches user's current token version
-  const user = await prisma.user.findUnique({
+  const user = await (prisma.user as any).findUnique({
     where: { id: decoded.id },
     select: { tokenVersion: true },
   });
@@ -105,7 +105,7 @@ export async function authenticateJWT(req: AuthRequest, res: Response, next: Nex
     return res.status(401).json({ error: 'User not found.' });
   }
 
-  if (decoded.tokenVersion !== undefined && decoded.tokenVersion !== user.tokenVersion) {
+  if (decoded.tokenVersion !== undefined && user.tokenVersion !== undefined && decoded.tokenVersion !== user.tokenVersion) {
     return res.status(401).json({ error: 'Session invalidated. Please log in again.' });
   }
 

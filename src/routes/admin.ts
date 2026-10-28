@@ -186,7 +186,7 @@ router.put('/change-password', async (req: AdminAuthRequest, res: Response) => {
     }
 
     const newHash = await hashPassword(newPassword);
-    await prisma.user.update({
+    await (prisma.user as any).update({
       where: { id: adminId },
       data: { 
         passwordHash: newHash,
