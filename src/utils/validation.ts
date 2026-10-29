@@ -1,7 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
-import { ZodObject, ZodError } from 'zod';
+import { z, ZodObject, ZodError } from 'zod';
 
-const passwordRegex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]{8,128}$/;
+const passwordSchema = z.string().min(6, 'Password must be at least 6 characters long').max(128);
 
 export function validateRequest(schema: ZodObject<any>) {
   return async (req: Request, res: Response, next: NextFunction) => {
@@ -14,8 +14,10 @@ export function validateRequest(schema: ZodObject<any>) {
       next();
     } catch (error: any) {
       if (error instanceof ZodError) {
+        const errorMessages = error.issues.map((e: any) => e.message).join('. ');
+        console.warn(`[Validation Error] ${req.method} ${req.originalUrl || req.path}: ${errorMessages}`);
         return res.status(400).json({
-          error: 'Validation failed',
+          error: errorMessages || 'Validation failed',
           details: error.issues.map((e: any) => ({
             field: e.path.join('.'),
             message: e.message,
@@ -27,20 +29,18 @@ export function validateRequest(schema: ZodObject<any>) {
   };
 }
 
-import { z } from 'zod';
-
 export const schemas = {
   signup: z.object({
     body: z.object({
-      email: z.string().email('Invalid email format'),
-      password: z.string().regex(passwordRegex, 'Password must be at least 8 characters with uppercase, lowercase, number, and special character (@$!%*?&)').max(128),
-      displayName: z.string().min(1).max(50).optional(),
+      email: z.string().trim().email('Invalid email format'),
+      password: passwordSchema,
+      displayName: z.string().trim().min(1).max(50).optional(),
     }),
   }),
 
   login: z.object({
     body: z.object({
-      email: z.string().email('Invalid email format'),
+      email: z.string().trim().email('Invalid email format'),
       password: z.string().min(1, 'Password is required'),
     }),
   }),
@@ -66,24 +66,24 @@ export const schemas = {
 
   forgotPasswordReset: z.object({
     body: z.object({
-      email: z.string().email('Invalid email format'),
-      code: z.string().regex(/^\d{6}$/, 'Code must be 6 digits'),
-      newPassword: z.string().regex(passwordRegex, 'Password must be at least 8 characters with uppercase, lowercase, number, and special character (@$!%*?&)').max(128),
+      email: z.string().trim().email('Invalid email format'),
+      code: z.string().trim().regex(/^\d{6}$/, 'Code must be 6 digits'),
+      newPassword: passwordSchema,
     }),
   }),
 
   passwordChangeRequest: z.object({
     body: z.object({
       currentPassword: z.string().min(1, 'Current password is required'),
-      newPassword: z.string().regex(passwordRegex, 'Password must be at least 8 characters with uppercase, lowercase, number, and special character (@$!%*?&)').max(128),
+      newPassword: passwordSchema,
     }),
   }),
 
   passwordChangeVerify: z.object({
     body: z.object({
-      code: z.string().regex(/^\d{6}$/, 'Code must be 6 digits'),
+      code: z.string().trim().regex(/^\d{6}$/, 'Code must be 6 digits'),
       currentPassword: z.string().min(1, 'Current password is required'),
-      newPassword: z.string().regex(passwordRegex, 'Password must be at least 8 characters with uppercase, lowercase, number, and special character (@$!%*?&)').max(128),
+      newPassword: passwordSchema,
     }),
   }),
 
@@ -123,7 +123,7 @@ export const schemas = {
       industry: z.string().optional(),
       deploymentModel: z.string().optional(),
       adminRole: z.string().optional(),
-      password: z.string().regex(passwordRegex, 'Password must be at least 8 characters with uppercase, lowercase, number, and special character (@$!%*?&)').max(128).optional(),
+      password: passwordSchema.optional(),
       authPreference: z.string().optional(),
       useCaseDetails: z.string().optional(),
     }),
@@ -131,8 +131,8 @@ export const schemas = {
 
   enterpriseVerifySignupOtp: z.object({
     body: z.object({
-      code: z.string().regex(/^\d{6}$/, 'Code must be 6 digits'),
-      workEmail: z.string().email('Invalid email format'),
+      code: z.string().trim().regex(/^\d{6}$/, 'Code must be 6 digits'),
+      workEmail: z.string().trim().email('Invalid email format'),
       companyName: z.string().min(1).max(100),
       companyDomain: z.string().optional(),
       country: z.string().optional(),
@@ -141,7 +141,7 @@ export const schemas = {
       deploymentModel: z.string().optional(),
       adminName: z.string().min(1).max(100),
       adminRole: z.string().optional(),
-      password: z.string().regex(passwordRegex, 'Password must be at least 8 characters with uppercase, lowercase, number, and special character (@$!%*?&)').max(128).optional(),
+      password: passwordSchema.optional(),
       authPreference: z.string().optional(),
       useCaseDetails: z.string().optional(),
     }),
@@ -149,32 +149,32 @@ export const schemas = {
 
   enterpriseSendLoginOtp: z.object({
     body: z.object({
-      workEmail: z.string().email('Invalid email format'),
+      workEmail: z.string().trim().email('Invalid email format'),
     }),
   }),
 
   enterpriseVerifyLoginOtp: z.object({
     body: z.object({
-      workEmail: z.string().email('Invalid email format'),
-      code: z.string().regex(/^\d{6}$/, 'Code must be 6 digits'),
+      workEmail: z.string().trim().email('Invalid email format'),
+      code: z.string().trim().regex(/^\d{6}$/, 'Code must be 6 digits'),
     }),
   }),
 
   enterpriseRegister: z.object({
     body: z.object({
       companyName: z.string().min(1).max(100),
-      workEmail: z.string().email('Invalid email format'),
+      workEmail: z.string().trim().email('Invalid email format'),
       companyDomain: z.string().optional(),
       teamScale: z.string().optional(),
       industry: z.string().optional(),
       deploymentModel: z.string().optional(),
       adminName: z.string().min(1).max(100),
       adminRole: z.string().optional(),
-      password: z.string().regex(passwordRegex, 'Password must be at least 8 characters with uppercase, lowercase, number, and special character (@$!%*?&)').max(128).optional(),
+      password: passwordSchema.optional(),
       authPreference: z.string().optional(),
       country: z.string().optional(),
       useCaseDetails: z.string().optional(),
-      code: z.string().regex(/^\d{6}$/, 'Code must be 6 digits').optional(),
+      code: z.string().trim().regex(/^\d{6}$/, 'Code must be 6 digits').optional(),
     }),
   }),
 
@@ -225,7 +225,7 @@ export const schemas = {
   adminChangePassword: z.object({
     body: z.object({
       currentPassword: z.string().optional(),
-      newPassword: z.string().regex(passwordRegex, 'Password must be at least 8 characters with uppercase, lowercase, number, and special character (@$!%*?&)').max(128),
+      newPassword: passwordSchema,
     }),
   }),
 
