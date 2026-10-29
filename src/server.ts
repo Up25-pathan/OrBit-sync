@@ -63,6 +63,7 @@ const allowedOrigins = [
   'https://api.orbit-sync.dev',
   'https://relay.orbit-sync.dev',
   'https://orbit-sync.onrender.com',
+  'https://orbit-sync-lake.vercel.app',
   'https://orbitcollab-three.vercel.app',
   'https://orbit-server-xbr5.onrender.com',
   'tauri://localhost',
@@ -78,7 +79,14 @@ function isOriginAllowed(origin: string): boolean {
   try {
     const url = new URL(origin);
     const host = url.hostname.toLowerCase();
-    // Allow exact production domain and specific subdomains only
+
+    // Allow all Vercel deployments (production, preview, orbit-sync-lake, etc.)
+    if (host.endsWith('.vercel.app')) return true;
+
+    // Allow Render backend services
+    if (host.endsWith('.onrender.com')) return true;
+
+    // Allow exact production domain and specific subdomains
     const allowedHosts = [
       'orbit-sync.dev',
       'www.orbit-sync.dev',
@@ -86,10 +94,7 @@ function isOriginAllowed(origin: string): boolean {
       'relay.orbit-sync.dev',
     ];
     if (allowedHosts.includes(host)) return true;
-    // Allow specific Vercel deployment (production only)
-    if (host === 'orbitcollab-three.vercel.app') return true;
-    // Allow specific Render service
-    if (host === 'orbit-server-xbr5.onrender.com') return true;
+
     // Allow Tauri desktop app
     if (host === 'tauri.localhost') return true;
   } catch {
@@ -110,7 +115,7 @@ const corsOptions: cors.CorsOptions = {
     }
   },
   credentials: true,
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Control-Server-Secret', 'Accept'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Control-Server-Secret', 'Accept', 'X-Requested-With', 'Origin'],
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   optionsSuccessStatus: 200,
 };
