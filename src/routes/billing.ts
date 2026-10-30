@@ -1,10 +1,11 @@
-import { Response } from 'express';
+import { Request, Response } from 'express';
 import Razorpay from 'razorpay';
 import Stripe from 'stripe';
 import crypto from 'crypto';
 import { prisma } from '../db';
-import { AuthRequest, authenticateJWT } from '../auth';
+import { AuthRequest, authenticateJWT, verifyToken } from '../auth';
 import { generateLicenseKey } from '../utils/licenseGenerator';
+import { redeemCoupon, validateCoupon } from '../utils/coupons';
 
 const express = require('express');
 const router = express.Router();
@@ -50,11 +51,65 @@ const razorpay = razorpayKeyId && razorpayKeySecret
 const stripeSecretKey = process.env.STRIPE_SECRET_KEY || '';
 const stripe = stripeSecretKey ? new Stripe(stripeSecretKey, { apiVersion: '2024-04-10' as any }) : null;
 
-// PayPal credentials (We support standard checkout script, mock fallback if empty)
+// PayPal credentials (real Orders v2 API when configured)
 const paypalClientId = process.env.PAYPAL_CLIENT_ID || '';
+const paypalClientSecret = process.env.PAYPAL_CLIENT_SECRET || '';
+const paypalConfigured = Boolean(paypalClientId && paypalClientSecret);
+const paypalApiBase =
+  (process.env.PAYPAL_ENV || 'sandbox').toLowerCase() === 'live'
+    ? 'https://api-m.paypal.com'
+    : 'https://api-m.sandbox.paypal.com';
+
+async function getPayPalAccessToken(): Promise<string> {
+  const auth = Buffer.from(`${paypalClientId}:${paypalClientSecret}`).toString('base64');
+  const response = await fetch(`${paypalApiBase}/v1/oauth2/token`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Basic ${auth}`,
+      'Content-Type': 'application/x-www-form-urlencoded',
+    },
+    body: 'grant_type=client_credentials',
+  });
+
+  if (!response.ok) {
+    const detail = await response.text();
+    throw new Error(`PayPal auth failed (${response.status}): ${detail.slice(0, 200)}`);
+  }
+
+  const data: any = await response.json();
+  return data.access_token;
+}
 
 
 import { sendPaymentReceiptEmail } from '../utils/mailer';
+
+// ----------------------------------------------------
+// COUPON VALIDATION (EARLY-BIRD / PROMOTIONAL CODES)
+// ----------------------------------------------------
+
+// POST /api/billing/coupon/validate
+router.post('/coupon/validate', async (req: Request, res: Response) => {
+  try {
+    const { code } = (req.body || {}) as { code?: string };
+    const authHeader = req.headers.authorization;
+    const token = authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : '';
+    const decoded = token ? verifyToken(token) : null;
+    const result = await validateCoupon(code || '', decoded?.id);
+    if (!result.valid) {
+      return res.status(400).json({ valid: false, error: result.reason || 'Invalid coupon code.' });
+    }
+
+    return res.status(200).json({
+      valid: true,
+      code: result.code,
+      discountPercent: result.discountPercent,
+      expiresAt: result.expiresAt,
+    });
+  } catch (err: any) {
+    console.error('[Coupon Validate] Error:', err);
+    return res.status(500).json({ valid: false, error: 'Could not validate coupon code.' });
+  }
+});
 
 // ----------------------------------------------------
 // SECTION A: RAZORPAY GATEWAY API CONTROLLERS
@@ -83,7 +138,15 @@ router.post('/razorpay/order', authenticateJWT, async (req: AuthRequest, res: Re
       ? (planTier === 'mesh' ? 240000 : 75000)  // ₹2,400 / ₹750
       : (planTier === 'mesh' ? 2900 : 900);     // $29 / $9
 
-    const discount = couponCode?.toUpperCase() === 'ORBIT20' ? 0.2 : 0;
+    let discount = 0;
+    if (couponCode) {
+      const coupon = await validateCoupon(couponCode, userId);
+      if (!coupon.valid) {
+        return res.status(400).json({ error: coupon.reason || 'Invalid coupon code.' });
+      }
+      discount = (coupon.discountPercent || 0) / 100;
+    }
+
     const amountSubunits = Math.round(baseSubunits * (1 - discount));
 
     // Razorpay requires minimum transaction of 100 paise / 100 cents
@@ -140,7 +203,6 @@ router.post('/razorpay/verify', authenticateJWT, async (req: AuthRequest, res: R
       razorpay_order_id, 
       razorpay_signature, 
       planTier,
-      currency = 'USD'
     } = req.body;
 
     if (!userId) {
@@ -149,6 +211,10 @@ router.post('/razorpay/verify', authenticateJWT, async (req: AuthRequest, res: R
 
     if (!razorpay_payment_id || !razorpay_order_id || !razorpay_signature) {
       return res.status(400).json({ error: 'Missing required Razorpay payment verification fields.' });
+    }
+
+    if (!razorpay) {
+      return res.status(503).json({ error: 'Razorpay payment gateway is not configured on the server.' });
     }
 
     // Cryptographic signature check (constant-time comparison)
@@ -166,13 +232,42 @@ router.post('/razorpay/verify', authenticateJWT, async (req: AuthRequest, res: R
       return res.status(400).json({ error: 'Signature verification mismatch.' });
     }
 
+    const order = await razorpay.orders.fetch(razorpay_order_id);
+    const orderNotes = (order.notes || {}) as Record<string, string>;
+    const orderPlanTier = orderNotes.planTier;
+    const orderUserId = orderNotes.userId;
+
+    if (orderUserId !== userId) {
+      return res.status(403).json({ error: 'This payment order belongs to a different account.' });
+    }
+
+    if (!orderPlanTier || !['mesh', 'pro'].includes(orderPlanTier)) {
+      return res.status(400).json({ error: 'Payment order is missing a valid plan tier.' });
+    }
+
+    if (planTier && planTier !== orderPlanTier) {
+      return res.status(400).json({ error: 'Plan tier does not match the payment order.' });
+    }
+
+    const effectiveTier = orderPlanTier;
+    const orderCurrency = order.currency || 'USD';
+    const orderCouponCode = orderNotes.couponCode || '';
+
+    let couponPercent = 0;
+    if (orderCouponCode) {
+      const coupon = await validateCoupon(orderCouponCode, userId);
+      if (coupon.valid) {
+        couponPercent = coupon.discountPercent || 0;
+      }
+    }
+
     const expiresAt = new Date();
     expiresAt.setMonth(expiresAt.getMonth() + 1);
 
     await prisma.subscription.upsert({
       where: { userId },
       update: {
-        planTier,
+        planTier: effectiveTier,
         status: 'active',
         stripeCustomerId: razorpay_payment_id,
         stripeSubscriptionId: razorpay_order_id,
@@ -180,7 +275,7 @@ router.post('/razorpay/verify', authenticateJWT, async (req: AuthRequest, res: R
       },
       create: {
         userId,
-        planTier,
+        planTier: effectiveTier,
         status: 'active',
         stripeCustomerId: razorpay_payment_id,
         stripeSubscriptionId: razorpay_order_id,
@@ -188,12 +283,17 @@ router.post('/razorpay/verify', authenticateJWT, async (req: AuthRequest, res: R
       },
     });
 
-    await updateUserLicense(userId, planTier);
+    await updateUserLicense(userId, effectiveTier);
 
-    const isINR = currency === 'INR';
-    const displayAmount = isINR
-      ? (planTier === 'mesh' ? '₹2,400' : '₹750')
-      : (planTier === 'mesh' ? '$29' : '$9');
+    if (orderCouponCode && couponPercent > 0) {
+      await redeemCoupon(orderCouponCode, userId, effectiveTier);
+    }
+
+    const orderAmount = Number(order.amount) / 100;
+    const displayAmount =
+      orderCurrency === 'INR'
+        ? `₹${orderAmount.toLocaleString('en-IN')}`
+        : `$${orderAmount.toFixed(2)}`;
 
     // Asynchronously dispatch payment receipt email
     prisma.user.findUnique({
@@ -202,7 +302,7 @@ router.post('/razorpay/verify', authenticateJWT, async (req: AuthRequest, res: R
     }).then((userWithLicense) => {
       if (userWithLicense?.email) {
         sendPaymentReceiptEmail(userWithLicense.email, {
-          planTier: planTier === 'mesh' ? 'Mesh Cluster Tier' : 'Developer Pro Tier',
+          planTier: effectiveTier === 'mesh' ? 'Mesh Cluster Tier' : 'Developer Pro Tier',
           amount: displayAmount,
           paymentId: razorpay_payment_id,
           licenseKey: userWithLicense.license?.licenseKey || '',
@@ -234,7 +334,7 @@ router.post('/verify-payment', authenticateJWT, async (req: AuthRequest, res: Re
 router.post('/stripe/session', authenticateJWT, async (req: AuthRequest, res: Response) => {
   try {
     const userId = req.user?.id;
-    const { planTier } = req.body;
+    const { planTier, couponCode } = req.body;
 
     if (!userId) {
       return res.status(401).json({ error: 'Unauthorized.' });
@@ -252,13 +352,26 @@ router.post('/stripe/session', authenticateJWT, async (req: AuthRequest, res: Re
       return res.status(404).json({ error: 'User not found.' });
     }
 
-    // 1. SECURE STRIPE SANDBOX (If Stripe is not configured)
+    let couponPercent = 0;
+    if (couponCode) {
+      const coupon = await validateCoupon(couponCode, userId);
+      if (!coupon.valid) {
+        return res.status(400).json({ error: coupon.reason || 'Invalid coupon code.' });
+      }
+      couponPercent = coupon.discountPercent || 0;
+    }
+
+    // 1. STRIPE SANDBOX (only when explicitly allowed outside production)
     const clientUrl = req.get('origin') || process.env.CLIENT_URL || 'http://localhost:3000';
+    const sandboxAllowed = process.env.ALLOW_PAYMENT_SANDBOX === 'true' || process.env.NODE_ENV !== 'production';
+
     if (!stripe) {
-      console.log(`[Stripe Sandbox] Generating mock session redirect...`);
+      if (!sandboxAllowed) {
+        return res.status(503).json({ error: 'Stripe is not configured on the server. Please set STRIPE_SECRET_KEY.' });
+      }
+      console.log(`[Stripe Sandbox] Generating sandbox session redirect...`);
       return res.status(200).json({
         isSandbox: true,
-        // Mock Stripe payment success route
         url: `${clientUrl}/console?checkout_success=true&gateway=stripe&tier=${planTier}`,
       });
     }
@@ -268,14 +381,31 @@ router.post('/stripe/session', authenticateJWT, async (req: AuthRequest, res: Re
       ? (process.env.STRIPE_PRICE_MESH || 'price_mesh_mock_29')
       : (process.env.STRIPE_PRICE_PRO || 'price_pro_mock_9');
 
+    let discounts: any[] | undefined;
+    if (couponCode && couponPercent > 0) {
+      const stripeCouponId = `orbit-${String(couponCode).toLowerCase().replace(/[^a-z0-9]/g, '')}`;
+      try {
+        await stripe.coupons.retrieve(stripeCouponId);
+      } catch {
+        await stripe.coupons.create({
+          id: stripeCouponId,
+          percent_off: couponPercent,
+          duration: 'once',
+          name: String(couponCode).toUpperCase(),
+        });
+      }
+      discounts = [{ coupon: stripeCouponId }];
+    }
+
     const session = await stripe.checkout.sessions.create({
       payment_method_types: ['card'],
       customer_email: user.email,
       line_items: [{ price: priceId, quantity: 1 }],
       mode: 'subscription',
+      discounts,
       success_url: `${clientUrl}/console?checkout_success=true`,
       cancel_url: `${clientUrl}/checkout?plan=${planTier}`,
-      metadata: { userId, planTier },
+      metadata: { userId, planTier, couponCode: couponCode ? String(couponCode).toUpperCase() : '' },
     });
 
     return res.status(200).json({
@@ -293,10 +423,15 @@ router.post('/stripe/session', authenticateJWT, async (req: AuthRequest, res: Re
 router.post('/stripe/verify-sandbox', authenticateJWT, async (req: AuthRequest, res: Response) => {
   try {
     const userId = req.user?.id;
-    const { planTier } = req.body;
+    const { planTier, couponCode } = req.body;
 
     if (!userId) {
       return res.status(401).json({ error: 'Unauthorized.' });
+    }
+
+    const sandboxAllowed = process.env.ALLOW_PAYMENT_SANDBOX === 'true' || process.env.NODE_ENV !== 'production';
+    if (!sandboxAllowed) {
+      return res.status(403).json({ error: 'Sandbox payments are disabled in production.' });
     }
 
     // Provision subscription in sandbox mode directly
@@ -310,6 +445,13 @@ router.post('/stripe/verify-sandbox', authenticateJWT, async (req: AuthRequest, 
     });
 
     await updateUserLicense(userId, planTier);
+
+    if (couponCode) {
+      const coupon = await validateCoupon(couponCode, userId);
+      if (coupon.valid) {
+        await redeemCoupon(couponCode, userId, planTier);
+      }
+    }
 
     return res.status(200).json({ status: 'SUCCESS' });
   } catch (error: any) {
@@ -327,25 +469,77 @@ router.post('/stripe/verify-sandbox', authenticateJWT, async (req: AuthRequest, 
 router.post('/paypal/order', authenticateJWT, async (req: AuthRequest, res: Response) => {
   try {
     const userId = req.user?.id;
-    const { planTier } = req.body;
+    const { planTier, couponCode } = req.body;
 
     if (!userId) {
       return res.status(401).json({ error: 'Unauthorized.' });
     }
 
-    const price = planTier === 'mesh' ? 29.00 : 9.00;
+    if (!planTier || !['mesh', 'pro'].includes(planTier)) {
+      return res.status(400).json({ error: 'Invalid plan tier.' });
+    }
 
-    // Renders PayPal Sandbox details (If real developer SDK is not initialized, mock it)
-    console.log(`[PayPal Order] Creating payment order structure: $${price} for user ${userId}`);
-    const mockOrderId = `PAYPAL-${crypto.randomBytes(6).toString('hex').toUpperCase()}`;
+    if (!paypalConfigured) {
+      return res.status(503).json({
+        error: 'PayPal is not configured on the server. Please set PAYPAL_CLIENT_ID and PAYPAL_CLIENT_SECRET.',
+      });
+    }
+
+    let couponPercent = 0;
+    if (couponCode) {
+      const coupon = await validateCoupon(couponCode, userId);
+      if (!coupon.valid) {
+        return res.status(400).json({ error: coupon.reason || 'Invalid coupon code.' });
+      }
+      couponPercent = coupon.discountPercent || 0;
+    }
+
+    const basePrice = planTier === 'mesh' ? 29.0 : 9.0;
+    const price = Math.round(basePrice * (1 - couponPercent / 100) * 100) / 100;
+    const clientUrl = req.get('origin') || process.env.CLIENT_URL || 'http://localhost:3000';
+    const token = await getPayPalAccessToken();
+
+    const response = await fetch(`${paypalApiBase}/v2/checkout/orders`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        intent: 'CAPTURE',
+        purchase_units: [
+          {
+            amount: { currency_code: 'USD', value: price.toFixed(2) },
+            description: planTier === 'mesh' ? 'OrBit Mesh Cluster Tier' : 'OrBit Developer Pro Tier',
+            custom_id: planTier,
+          },
+        ],
+        application_context: {
+          brand_name: 'OrBit',
+          user_action: 'PAY_NOW',
+          return_url: `${clientUrl}/console?checkout_success=true&gateway=paypal&tier=${encodeURIComponent(
+            planTier
+          )}&coupon=${encodeURIComponent(couponCode || '')}`,
+          cancel_url: `${clientUrl}/checkout?plan=${encodeURIComponent(planTier)}`,
+        },
+      }),
+    });
+
+    const order: any = await response.json();
+    if (!response.ok) {
+      console.error('[PayPal Order] API error:', order);
+      return res.status(502).json({ error: 'PayPal could not create the order.' });
+    }
+
+    const approveLink = (order.links || []).find((link: any) => link.rel === 'approve');
 
     return res.status(200).json({
-      isSandbox: !paypalClientId,
-      orderId: mockOrderId,
+      isSandbox: false,
+      orderId: order.id,
+      approveUrl: approveLink?.href || null,
       amount: price,
       currency: 'USD',
     });
-
   } catch (error: any) {
     console.error('PayPal order error:', error);
     return res.status(500).json({ error: 'Failed to launch PayPal session.' });
@@ -356,13 +550,69 @@ router.post('/paypal/order', authenticateJWT, async (req: AuthRequest, res: Resp
 router.post('/paypal/capture', authenticateJWT, async (req: AuthRequest, res: Response) => {
   try {
     const userId = req.user?.id;
-    const { orderId, planTier } = req.body;
+    const { orderId, planTier, couponCode } = req.body;
 
     if (!userId) {
       return res.status(401).json({ error: 'Unauthorized.' });
     }
 
-    console.log(`[PayPal Capture] Processing capture for order ${orderId} -> User: ${userId}`);
+    if (!orderId) {
+      return res.status(400).json({ error: 'PayPal order ID is required.' });
+    }
+
+    if (!planTier || !['mesh', 'pro'].includes(planTier)) {
+      return res.status(400).json({ error: 'Invalid plan tier.' });
+    }
+
+    if (!paypalConfigured) {
+      return res.status(503).json({ error: 'PayPal is not configured on the server.' });
+    }
+
+    const token = await getPayPalAccessToken();
+
+    const orderResponse = await fetch(`${paypalApiBase}/v2/checkout/orders/${encodeURIComponent(orderId)}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const paypalOrder: any = await orderResponse.json();
+    if (!orderResponse.ok) {
+      console.error('[PayPal Capture] Could not load order:', paypalOrder);
+      return res.status(400).json({ error: 'Could not load the PayPal order.' });
+    }
+
+    const orderUnit = Array.isArray(paypalOrder.purchase_units) ? paypalOrder.purchase_units[0] : null;
+    const orderTier = orderUnit?.custom_id;
+    const orderAmount = Number(orderUnit?.amount?.value);
+    const orderCurrency = orderUnit?.amount?.currency_code;
+
+    if (!['mesh', 'pro'].includes(orderTier)) {
+      return res.status(400).json({ error: 'PayPal order is missing a valid plan tier.' });
+    }
+
+    if (planTier && planTier !== orderTier) {
+      return res.status(400).json({ error: 'Plan tier does not match the PayPal order.' });
+    }
+
+    if (!Number.isFinite(orderAmount) || orderAmount <= 0 || orderCurrency !== 'USD') {
+      return res.status(400).json({ error: 'PayPal order has an invalid amount.' });
+    }
+
+    const effectiveTier = orderTier;
+
+    const captureResponse = await fetch(`${paypalApiBase}/v2/checkout/orders/${encodeURIComponent(orderId)}/capture`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+    });
+
+    const capture: any = await captureResponse.json();
+    if (!captureResponse.ok || capture.status !== 'COMPLETED') {
+      console.error('[PayPal Capture] API error:', capture);
+      return res.status(400).json({ error: 'PayPal payment was not completed.' });
+    }
+
+    console.log(`[PayPal Capture] Completed order ${orderId} -> User: ${userId} (${effectiveTier})`);
 
     const expiresAt = new Date();
     expiresAt.setMonth(expiresAt.getMonth() + 1);
@@ -371,21 +621,28 @@ router.post('/paypal/capture', authenticateJWT, async (req: AuthRequest, res: Re
     await prisma.subscription.upsert({
       where: { userId },
       update: {
-        planTier,
+        planTier: effectiveTier,
         status: 'active',
         stripeCustomerId: orderId, // Store PayPal order reference here
         expiresAt,
       },
       create: {
         userId,
-        planTier,
+        planTier: effectiveTier,
         status: 'active',
         stripeCustomerId: orderId,
         expiresAt,
       },
     });
 
-    await updateUserLicense(userId, planTier);
+    await updateUserLicense(userId, effectiveTier);
+
+    if (couponCode) {
+      const coupon = await validateCoupon(couponCode, userId);
+      if (coupon.valid) {
+        await redeemCoupon(couponCode, userId, effectiveTier);
+      }
+    }
 
     return res.status(200).json({
       status: 'SUCCESS',
@@ -404,7 +661,7 @@ export default router;
 const stripeWebhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
 
 router.post('/webhooks/stripe', express.raw({ type: 'application/json' }), async (req: Request, res: Response) => {
-  const sig = req.headers.get('stripe-signature') || req.headers.get('Stripe-Signature') || '';
+  const sig = req.headers['stripe-signature'] || req.headers['Stripe-Signature'] || '';
 
   if (!stripeWebhookSecret) {
     console.error('[Stripe Webhook] STRIPE_WEBHOOK_SECRET not configured');
@@ -463,6 +720,15 @@ router.post('/webhooks/stripe', express.raw({ type: 'application/json' }), async
           });
 
           await updateUserLicense(userId, planTier);
+
+          const couponCode = session.metadata?.couponCode;
+          if (couponCode) {
+            const coupon = await validateCoupon(couponCode, userId);
+            if (coupon.valid) {
+              await redeemCoupon(couponCode, userId, planTier);
+            }
+          }
+
           console.log(`[Stripe Webhook] Subscription activated for user ${userId}: ${planTier}`);
         }
         break;

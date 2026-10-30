@@ -692,5 +692,203 @@ export const sendEnterpriseOtpEmail = async (
   }
 };
 
+const escapeHtml = (value: string): string =>
+  value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+
+const waitlistEmailShell = (inner: string, accent: string = '#ff003c') => `
+  <!DOCTYPE html>
+  <html>
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  </head>
+  <body style="margin:0; padding:0; background-color:#030303; font-family:-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; color:#ffffff;">
+    <table border="0" cellpadding="0" cellspacing="0" width="100%" style="background-color:#030303; padding: 40px 10px;">
+      <tr>
+        <td align="center">
+          <table border="0" cellpadding="0" cellspacing="0" width="100%" style="max-width: 520px; background-color:#0a0808; border: 1px solid ${accent}66; border-radius: 16px; overflow: hidden; box-shadow: 0 0 40px ${accent}26;">
+            <tr>
+              <td style="padding: 35px 35px 20px 35px; text-align: center; border-bottom: 1px solid rgba(255, 255, 255, 0.06);">
+                <div style="font-family: monospace, Courier, monospace; font-size: 24px; font-weight: 900; letter-spacing: 3px; color: #ffffff; text-transform: uppercase;">
+                  ORBIT<span style="color: ${accent};">.SYNC</span>
+                </div>
+                <div style="color: #808085; font-size: 11px; letter-spacing: 1.5px; text-transform: uppercase; margin-top: 5px;">
+                  Local-First Synchronization Engine
+                </div>
+              </td>
+            </tr>
+            <tr>
+              <td style="padding: 35px;">
+                ${inner}
+              </td>
+            </tr>
+            <tr>
+              <td style="padding: 20px 35px; background: #060505; border-top: 1px solid rgba(255, 255, 255, 0.06); text-align: center;">
+                <p style="margin: 0; color: #505055; font-size: 11px;">
+                  OrBit Mesh Protocol &bull; Zero-Knowledge P2P Infrastructure
+                </p>
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+    </table>
+  </body>
+  </html>
+`;
+
+export const sendWaitlistConfirmationEmail = async (targetEmail: string, confirmUrl: string) => {
+  const resendApiKey = process.env.RESEND_API_KEY || '';
+  const senderFrom = process.env.RESEND_FROM_EMAIL || DEFAULT_SENDER;
+  const safeEmail = escapeHtml(targetEmail);
+  const safeUrl = escapeHtml(confirmUrl);
+
+  const subject = 'Confirm your OrBit early access and claim 50% off';
+  const htmlContent = waitlistEmailShell(`
+    <h2 style="margin: 0 0 15px 0; color: #ffffff; font-size: 21px; font-weight: 700; letter-spacing: -0.5px;">
+      One click to lock in 50% off
+    </h2>
+    <p style="margin: 0 0 18px 0; color: #a0a0a5; font-size: 14px; line-height: 1.6;">
+      You asked to be notified when OrBit launches. Confirm <strong style="color: #ffffff;">${safeEmail}</strong> and we will reserve your early-bird discount.
+    </p>
+    <div style="background: rgba(255, 0, 60, 0.06); border: 1px solid rgba(255, 0, 60, 0.25); border-radius: 10px; padding: 16px; margin-bottom: 24px;">
+      <p style="margin: 0; color: #ff859f; font-size: 13px; line-height: 1.5;">
+        Confirmed members receive a personal 50% launch code, launch-day access, and product updates. No spam.
+      </p>
+    </div>
+    <div style="text-align: center; margin-bottom: 24px;">
+      <a href="${safeUrl}" style="display: inline-block; background: #ff003c; color: #ffffff; text-decoration: none; font-weight: 700; font-size: 14px; padding: 14px 28px; border-radius: 8px;">
+        Confirm my early access
+      </a>
+    </div>
+    <p style="margin: 0; color: #606065; font-size: 11px; line-height: 1.5; text-align: center;">
+      This link expires in 48 hours. If the button does not work, paste this URL into your browser:<br>
+      <span style="color: #808085; word-break: break-all;">${safeUrl}</span>
+    </p>
+  `);
+
+  if (resendApiKey) {
+    try {
+      const response = await fetch('https://api.resend.com/emails', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${resendApiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          from: senderFrom,
+          to: [targetEmail],
+          subject,
+          html: htmlContent,
+        }),
+      });
+
+      const resData: any = await response.json();
+      if (response.ok) {
+        console.log(`[Resend Mailer] Waitlist confirmation sent! ID: ${resData.id}`);
+        return { success: true, id: resData.id };
+      }
+      console.error('[Resend Mailer Error] Waitlist confirmation failed:', resData);
+      return { success: false, error: resData };
+    } catch (err) {
+      console.error('[Resend Mailer Error] Waitlist confirmation dispatch failed:', err);
+      return { success: false, error: err };
+    }
+  }
+
+  console.log(`=========================================`);
+  console.log(`[Fallback Log] WAITLIST CONFIRMATION`);
+  console.log(`Recipient: ${targetEmail}`);
+  console.log(`Confirm URL: ${confirmUrl}`);
+  console.log(`=========================================`);
+  return { success: true, fallback: true };
+};
+
+export const sendWaitlistWelcomeEmail = async (
+  targetEmail: string,
+  details: { referralCode: string; discountCode: string; referralUrl: string; position: number }
+) => {
+  const resendApiKey = process.env.RESEND_API_KEY || '';
+  const senderFrom = process.env.RESEND_FROM_EMAIL || DEFAULT_SENDER;
+  const safeEmail = escapeHtml(targetEmail);
+  const safeDiscount = escapeHtml(details.discountCode);
+  const safeReferralUrl = escapeHtml(details.referralUrl);
+
+  const subject = `You are in: your OrBit 50% early-bird code is ${details.discountCode}`;
+  const htmlContent = waitlistEmailShell(`
+    <h2 style="margin: 0 0 10px 0; color: #ffffff; font-size: 21px; font-weight: 700; letter-spacing: -0.5px;">
+      You are on the launch list
+    </h2>
+    <p style="margin: 0 0 20px 0; color: #a0a0a5; font-size: 14px; line-height: 1.6;">
+      <strong style="color: #ffffff;">${safeEmail}</strong> is confirmed. You are #${details.position} in line for OrBit launch access.
+    </p>
+
+    <div style="background: rgba(255, 0, 60, 0.06); border: 1px solid rgba(255, 0, 60, 0.25); border-radius: 10px; padding: 18px; margin-bottom: 22px;">
+      <div style="color: #808085; font-size: 11px; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 6px;">Your 50% early-bird code</div>
+      <div style="font-family: monospace; font-size: 18px; font-weight: bold; color: #ff003c; letter-spacing: 1px; word-break: break-all;">
+        ${safeDiscount}
+      </div>
+    </div>
+
+    <p style="margin: 0 0 18px 0; color: #a0a0a5; font-size: 14px; line-height: 1.6;">
+      Use this code at checkout when OrBit launches. It is tied to your account, single-use, and valid for 90 days.
+    </p>
+
+    <div style="background: #060505; border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 10px; padding: 16px; margin-bottom: 20px;">
+      <div style="color: #808085; font-size: 11px; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 6px;">Share your invite link</div>
+      <div style="font-family: monospace; font-size: 12px; color: #90caf9; word-break: break-all;">
+        ${safeReferralUrl}
+      </div>
+    </div>
+
+    <p style="margin: 0; color: #606065; font-size: 11px; line-height: 1.5; text-align: center;">
+      Referral code: <span style="color: #808085; font-family: monospace;">${escapeHtml(details.referralCode)}</span>
+    </p>
+  `);
+
+  if (resendApiKey) {
+    try {
+      const response = await fetch('https://api.resend.com/emails', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${resendApiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          from: senderFrom,
+          to: [targetEmail],
+          subject,
+          html: htmlContent,
+        }),
+      });
+
+      const resData: any = await response.json();
+      if (response.ok) {
+        console.log(`[Resend Mailer] Waitlist welcome sent! ID: ${resData.id}`);
+        return { success: true, id: resData.id };
+      }
+      console.error('[Resend Mailer Error] Waitlist welcome failed:', resData);
+      return { success: false, error: resData };
+    } catch (err) {
+      console.error('[Resend Mailer Error] Waitlist welcome dispatch failed:', err);
+      return { success: false, error: err };
+    }
+  }
+
+  console.log(`=========================================`);
+  console.log(`[Fallback Log] WAITLIST WELCOME`);
+  console.log(`Recipient: ${targetEmail}`);
+  console.log(`Discount Code: ${details.discountCode}`);
+  console.log(`Referral URL: ${details.referralUrl}`);
+  console.log(`Position: ${details.position}`);
+  console.log(`=========================================`);
+  return { success: true, fallback: true };
+};
+
 
 

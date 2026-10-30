@@ -155,3 +155,92 @@ model EnterpriseApplication {
   createdAt        DateTime  @default(now())
   updatedAt        DateTime  @updatedAt
 }
+
+model AuditLog {
+  id              String   @id @default(uuid())
+  adminUserId     String
+  adminEmail      String
+  action          String
+  targetType      String
+  targetId        String
+  details         String?
+  ipAddress       String?
+  userAgent       String?
+  createdAt       DateTime @default(now())
+
+  @@index([adminUserId])
+  @@index([targetType, targetId])
+  @@index([createdAt])
+}
+
+model WaitlistSignup {
+  id                  String    @id @default(uuid())
+  email               String    @unique
+  referralCode        String    @unique
+  referredBy          String?
+  status              String    @default("PENDING") // "PENDING", "CONFIRMED", "UNSUBSCRIBED"
+  confirmationToken   String?   @unique
+  confirmationExpires DateTime?
+  discountCode        String?
+  source              String?
+  os                  String?
+  teamSize            String?
+  useCase             String?
+  position            Int?
+  referralCount       Int       @default(0)
+  ipAddress           String?
+  userAgent           String?
+  createdAt           DateTime  @default(now())
+  confirmedAt         DateTime?
+
+  @@index([status])
+  @@index([createdAt])
+  @@index([referredBy])
+  @@index([discountCode])
+}
+
+model Coupon {
+  id              String             @id @default(uuid())
+  code            String             @unique
+  kind            String             @default("percent")
+  value           Int
+  currency        String?            @default("USD")
+  active          Boolean            @default(true)
+  waitlistOnly    Boolean            @default(true)
+  maxRedemptions  Int?               @default(1)
+  redemptions     Int                @default(0)
+  expiresAt       DateTime?
+  createdAt       DateTime           @default(now())
+  updatedAt       DateTime           @updatedAt
+  couponRedemptions CouponRedemption[]
+
+  @@index([active])
+  @@index([expiresAt])
+}
+
+model CouponRedemption {
+  id        String   @id @default(uuid())
+  couponId  String
+  coupon    Coupon   @relation(fields: [couponId], references: [id], onDelete: Cascade)
+  userId    String
+  planTier  String?
+  createdAt DateTime @default(now())
+
+  @@unique([couponId, userId])
+  @@index([userId])
+  @@index([createdAt])
+}
+
+model AnalyticsEvent {
+  id        String   @id @default(uuid())
+  name      String
+  path      String?
+  referrer  String?
+  sessionId String?
+  metadata  String?
+  createdAt DateTime @default(now())
+
+  @@index([name])
+  @@index([createdAt])
+  @@index([sessionId])
+}

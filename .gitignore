@@ -1,6 +1,8 @@
 node_modules/
 .env
 dist/
+.build/
+.prisma/
 *.log
-.orbit/
-.orbitignore
+logs/
+.env*

@@ -1919,5 +1919,100 @@ router.delete('/enterprises/:id', requireAdmin, async (req: AdminAuthRequest, re
   }
 });
 
+// ----------------------------------------------------
+// GROWTH: WAITLIST + FIRST-PARTY ANALYTICS
+// ----------------------------------------------------
+
+// GET /api/admin/waitlist
+router.get('/waitlist', requireAdmin, async (req: AdminAuthRequest, res: Response) => {
+  try {
+    const page = Math.max(1, parseInt(String(req.query.page || '1'), 10) || 1);
+    const limit = Math.min(100, Math.max(1, parseInt(String(req.query.limit || '25'), 10) || 25));
+    const status = typeof req.query.status === 'string' ? req.query.status.toUpperCase() : undefined;
+    const q = typeof req.query.q === 'string' ? req.query.q.trim() : '';
+
+    const where: any = {};
+    if (status && ['PENDING', 'CONFIRMED'].includes(status)) {
+      where.status = status;
+    }
+    if (q) {
+      where.OR = [
+        { email: { contains: q, mode: 'insensitive' } },
+        { referralCode: { contains: q, mode: 'insensitive' } },
+        { discountCode: { contains: q, mode: 'insensitive' } },
+      ];
+    }
+
+    const [signups, total, confirmed, pending] = await Promise.all([
+      prisma.waitlistSignup.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+        skip: (page - 1) * limit,
+        take: limit,
+      }),
+      prisma.waitlistSignup.count({ where }),
+      prisma.waitlistSignup.count({ where: { status: 'CONFIRMED' } }),
+      prisma.waitlistSignup.count({ where: { status: 'PENDING' } }),
+    ]);
+
+    return res.status(200).json({
+      signups,
+      pagination: { page, limit, total, totalPages: Math.ceil(total / limit) || 1 },
+      counts: { confirmed, pending, all: confirmed + pending },
+    });
+  } catch (err: any) {
+    console.error('[Admin] Failed to load waitlist:', err);
+    return res.status(500).json({ error: 'Failed to load waitlist.' });
+  }
+});
+
+// GET /api/admin/analytics/summary
+router.get('/analytics/summary', requireAdmin, async (req: AdminAuthRequest, res: Response) => {
+  try {
+    const days = Math.min(90, Math.max(1, parseInt(String(req.query.days || '30'), 10) || 30));
+    const since = new Date();
+    since.setDate(since.getDate() - days);
+
+    const events = await prisma.analyticsEvent.findMany({
+      where: { createdAt: { gte: since } },
+      select: { name: true, path: true, createdAt: true },
+      orderBy: { createdAt: 'asc' },
+      take: 20000,
+    });
+
+    const byName: Record<string, number> = {};
+    const byDay: Record<string, Record<string, number>> = {};
+    const byPath: Record<string, number> = {};
+
+    for (const event of events) {
+      byName[event.name] = (byName[event.name] || 0) + 1;
+      if (event.path) {
+        byPath[event.path] = (byPath[event.path] || 0) + 1;
+      }
+      const day = event.createdAt.toISOString().slice(0, 10);
+      if (!byDay[day]) byDay[day] = {};
+      byDay[day][event.name] = (byDay[day][event.name] || 0) + 1;
+    }
+
+    const series = Object.keys(byDay)
+      .sort()
+      .map((date) => ({ date, events: byDay[date] }));
+
+    return res.status(200).json({
+      days,
+      totalEvents: events.length,
+      byName,
+      byPath: Object.entries(byPath)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 20)
+        .map(([path, count]) => ({ path, count })),
+      series,
+    });
+  } catch (err: any) {
+    console.error('[Admin] Failed to load analytics summary:', err);
+    return res.status(500).json({ error: 'Failed to load analytics summary.' });
+  }
+});
+
 export default router;
 

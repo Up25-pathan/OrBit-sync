@@ -10,6 +10,8 @@ import billingRouter from './routes/billing';
 import adminRouter from './routes/admin';
 import updaterRouter from './routes/updater';
 import telemetryRouter from './routes/telemetry';
+import waitlistRouter from './routes/waitlist';
+import analyticsRouter from './routes/analytics';
 import { prisma } from './db';
 
 // Force DNS resolver to prefer IPv4 over IPv6 (fixes Render ENETUNREACH socket connect errors)
@@ -159,6 +161,12 @@ app.use('/api/telemetry', telemetryRouter);
 app.use('/api/v1/telemetry', telemetryRouter);
 app.use('/api/feedback', telemetryRouter);
 app.use('/api/v1/feedback', telemetryRouter);
+
+app.use('/api/waitlist', waitlistRouter);
+app.use('/api/v1/waitlist', waitlistRouter);
+
+app.use('/api/analytics', analyticsRouter);
+app.use('/api/v1/analytics', analyticsRouter);
 
 // Health check endpoint
 app.get('/health', (req, res) => {
