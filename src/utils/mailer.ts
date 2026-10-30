@@ -890,5 +890,84 @@ export const sendWaitlistWelcomeEmail = async (
   return { success: true, fallback: true };
 };
 
+export const sendWaitlistLaunchReminderEmail = async (
+  targetEmail: string,
+  details: { discountCode: string; referralCode: string; referralUrl: string; position: number }
+) => {
+  const resendApiKey = process.env.RESEND_API_KEY || '';
+  const senderFrom = process.env.RESEND_FROM_EMAIL || DEFAULT_SENDER;
+  const safeEmail = escapeHtml(targetEmail);
+  const safeDiscount = escapeHtml(details.discountCode);
+  const safeReferralUrl = escapeHtml(details.referralUrl);
 
+  const subject = 'OrBit launch reminder: your 50% early-bird code is ready';
+  const htmlContent = waitlistEmailShell(`
+    <h2 style="margin: 0 0 12px 0; color: #ffffff; font-size: 21px; font-weight: 700; letter-spacing: -0.5px;">
+      Launch is approaching
+    </h2>
+    <p style="margin: 0 0 18px 0; color: #a0a0a5; font-size: 14px; line-height: 1.6;">
+      Heads up, <strong style="color: #ffffff;">${safeEmail}</strong>. You are #${details.position} on the OrBit launch list. Your early-bird access is reserved.
+    </p>
+
+    <div style="background: rgba(255, 0, 60, 0.06); border: 1px solid rgba(255, 0, 60, 0.25); border-radius: 10px; padding: 18px; margin-bottom: 22px;">
+      <div style="color: #808085; font-size: 11px; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 6px;">Redeem at launch</div>
+      <div style="font-family: monospace; font-size: 18px; font-weight: bold; color: #ff003c; letter-spacing: 1px; word-break: break-all;">
+        ${safeDiscount}
+      </div>
+    </div>
+
+    <p style="margin: 0 0 18px 0; color: #a0a0a5; font-size: 14px; line-height: 1.6;">
+      Use this single-use 50% code at checkout when OrBit launches. It is valid for 90 days and tied to your confirmed email.
+    </p>
+
+    <div style="background: #060505; border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 10px; padding: 16px; margin-bottom: 20px;">
+      <div style="color: #808085; font-size: 11px; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 6px;">Share your invite link</div>
+      <div style="font-family: monospace; font-size: 12px; color: #90caf9; word-break: break-all;">
+        ${safeReferralUrl}
+      </div>
+    </div>
+
+    <p style="margin: 0; color: #606065; font-size: 11px; line-height: 1.5; text-align: center;">
+      Referral code: <span style="color: #808085; font-family: monospace;">${escapeHtml(details.referralCode)}</span>
+    </p>
+  `);
+
+  if (resendApiKey) {
+    try {
+      const response = await fetch('https://api.resend.com/emails', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${resendApiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          from: senderFrom,
+          to: [targetEmail],
+          subject,
+          html: htmlContent,
+        }),
+      });
+
+      const resData: any = await response.json();
+      if (response.ok) {
+        console.log(`[Resend Mailer] Waitlist launch reminder sent! ID: ${resData.id}`);
+        return { success: true, id: resData.id };
+      }
+      console.error('[Resend Mailer Error] Waitlist launch reminder failed:', resData);
+      return { success: false, error: resData };
+    } catch (err) {
+      console.error('[Resend Mailer Error] Waitlist launch reminder dispatch failed:', err);
+      return { success: false, error: err };
+    }
+  }
+
+  console.log(`=========================================`);
+  console.log(`[Fallback Log] WAITLIST LAUNCH REMINDER`);
+  console.log(`Recipient: ${targetEmail}`);
+  console.log(`Discount Code: ${details.discountCode}`);
+  console.log(`Referral Code: ${details.referralCode}`);
+  console.log(`Position: ${details.position}`);
+  console.log(`=========================================`);
+  return { success: true, fallback: true };
+};
 

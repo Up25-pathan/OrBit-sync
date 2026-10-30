@@ -3,8 +3,9 @@ import crypto from 'crypto';
 import { z } from 'zod';
 import { prisma } from '../db';
 import { createRateLimiter } from '../utils/rateLimiter';
+import { authenticateJWT, AuthRequest } from '../auth';
 import { createWaitlistCoupon, EARLY_BIRD_PERCENT, normalizeCouponCode } from '../utils/coupons';
-import { sendWaitlistConfirmationEmail, sendWaitlistWelcomeEmail } from '../utils/mailer';
+import { sendWaitlistConfirmationEmail, sendWaitlistWelcomeEmail, sendWaitlistLaunchReminderEmail } from '../utils/mailer';
 
 const router = Router();
 
@@ -197,13 +198,24 @@ router.get('/confirm', async (req: Request, res: Response) => {
       });
     }
 
+    const referralUrl = `${base}/?ref=${encodeURIComponent(confirmed.referralCode)}`;
+
     sendWaitlistWelcomeEmail(confirmed.email, {
       referralCode: confirmed.referralCode,
       discountCode: discountCode!,
-      referralUrl: `${base}/?ref=${encodeURIComponent(confirmed.referralCode)}`,
+      referralUrl,
       position,
     }).catch((err) => {
       console.error('[Waitlist] Welcome email failed:', err);
+    });
+
+    sendWaitlistLaunchReminderEmail(confirmed.email, {
+      discountCode: discountCode!,
+      referralCode: confirmed.referralCode,
+      referralUrl,
+      position,
+    }).catch((err) => {
+      console.error('[Waitlist] Launch reminder email failed:', err);
     });
 
     if (wantsJson) {
@@ -243,6 +255,36 @@ router.get('/stats', async (_req: Request, res: Response) => {
   } catch (err: any) {
     console.error('[Waitlist] Stats error:', err);
     return res.status(500).json({ error: 'Could not load waitlist stats.' });
+  }
+});
+
+// GET /api/waitlist/me - current user's waitlist referral info (auth required)
+router.get('/me', authenticateJWT, async (req: AuthRequest, res: Response) => {
+  try {
+    const userId = req.user?.id;
+    const email = req.user?.email;
+    if (!userId || !email) {
+      return res.status(401).json({ error: 'Authentication required.' });
+    }
+
+    const signup = await prisma.waitlistSignup.findFirst({
+      where: { email: { equals: email, mode: 'insensitive' } },
+      select: {
+        id: true,
+        email: true,
+        referralCode: true,
+        discountCode: true,
+        status: true,
+        referralCount: true,
+        createdAt: true,
+        confirmedAt: true,
+      },
+    });
+
+    return res.status(200).json({ signup });
+  } catch (err: any) {
+    console.error('[Waitlist] Me lookup error:', err);
+    return res.status(500).json({ error: 'Could not load your referral info.' });
   }
 });
 
